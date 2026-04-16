@@ -1,6 +1,7 @@
 import type { Metadata } from "next"
 import { Plus_Jakarta_Sans, Geist_Mono } from "next/font/google"
 import "./globals.css"
+import { ThemeProvider } from "next-themes"
 import { Toaster } from "@/components/ui/sonner"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { PostsProvider } from "@/lib/posts-context"
@@ -34,9 +35,11 @@ export default function RootLayout({
   return (
     <html
       lang="en"
+      suppressHydrationWarning
       className={`${plusJakartaSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
+        <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
         <TooltipProvider>
           <AIProviderProvider>
             <AccountsProvider>
@@ -52,6 +55,7 @@ export default function RootLayout({
             </AccountsProvider>
           </AIProviderProvider>
         </TooltipProvider>
+        </ThemeProvider>
       </body>
     </html>
   )

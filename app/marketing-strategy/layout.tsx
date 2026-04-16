@@ -1,15 +1,5 @@
-import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar"
-import { AppSidebar } from "@/components/layout/app-sidebar"
-import { AppHeader } from "@/components/layout/app-header"
+import { AppLayout } from "@/components/layout/app-layout"
 
-export default function MarketingStrategyLayout({ children }: { children: React.ReactNode }) {
-  return (
-    <SidebarProvider className="h-svh overflow-hidden">
-      <AppSidebar />
-      <SidebarInset>
-        <AppHeader />
-        <main className="flex-1 overflow-auto min-h-0">{children}</main>
-      </SidebarInset>
-    </SidebarProvider>
-  )
+export default function UmarketingUstrategyLayout({ children }: { children: React.ReactNode }) {
+  return <AppLayout>{children}</AppLayout>
 }

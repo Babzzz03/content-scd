@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { useUser, getInitials, PLAN_COLORS, PLAN_LABELS } from "@/lib/user-context"
 import { useTour } from "@/lib/tour-context"
+import { ThemeToggle } from "@/components/layout/theme-toggle"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 
@@ -32,21 +33,23 @@ export function AppHeader() {
         <span className="text-sm text-muted-foreground">PostFlow</span>
       </div>
 
-      {/* Right: tour button + user avatar */}
-      <div className="flex items-center gap-2">
-        {/* Tour trigger — visible on mobile (sidebar hidden), hidden on desktop (sidebar has it) */}
+      {/* Right: theme toggle + tour + user avatar */}
+      <div className="flex items-center gap-1">
+        <ThemeToggle />
+
+        {/* Tour trigger — hidden on mobile (bottom nav handles create; tour in sidebar on desktop) */}
         <Button
           variant="ghost"
           size="sm"
-          className="md:hidden h-8 gap-1.5 text-xs text-primary hover:text-primary hover:bg-primary/10"
+          className="hidden md:inline-flex h-8 gap-1.5 text-xs text-primary hover:text-primary hover:bg-primary/10"
           onClick={startTour}
           aria-label="Take a tour"
         >
           <PlayCircle className="size-3.5" />
-          <span className="hidden sm:inline">Tour</span>
+          <span>Tour</span>
         </Button>
 
-      {/* Right: user avatar dropdown */}
+      {/* User avatar dropdown */}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <button className="flex items-center gap-2 rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring">

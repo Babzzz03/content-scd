@@ -30,9 +30,11 @@ import {
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 
-const PLAN_FEATURES = {
+const PLAN_FEATURES: Record<string, string[]> = {
   free: ["5 scheduled posts", "1 platform", "Basic AI generation"],
+  starter: ["20 scheduled posts", "2 platforms", "Advanced AI generation"],
   pro: ["Unlimited posts", "All 3 platforms", "Advanced AI", "Brand Voice", "Analytics"],
+  agency: ["Everything in Pro", "Team seats", "Priority support", "Custom integrations"],
   enterprise: ["Everything in Pro", "Team seats", "Priority support", "Custom integrations"],
 }
 
@@ -327,10 +329,10 @@ export default function ProfilePage() {
               <Separator />
 
               <div className="flex flex-col gap-2">
-                {user.plan !== "enterprise" && (
+                {user.plan !== "agency" && (
                   <Button className="w-full" size="sm">
                     <CreditCard className="size-3.5 mr-1.5" />
-                    {user.plan === "free" ? "Upgrade to Pro" : "Upgrade to Enterprise"}
+                    {user.plan === "free" ? "Upgrade to Pro" : "Upgrade to Agency"}
                   </Button>
                 )}
                 {user.plan !== "free" && (

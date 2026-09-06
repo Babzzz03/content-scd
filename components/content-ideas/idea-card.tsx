@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import {
   Bookmark,
   BookmarkCheck,
@@ -9,7 +9,6 @@ import {
   Clock,
   Film,
   MessageSquare,
-  Lightbulb,
   Laugh,
   Eye,
   Mic,
@@ -70,6 +69,12 @@ const PLATFORM_ICONS: Record<Platform, React.ElementType> = {
   instagram: InstagramIcon,
 }
 
+const DIFFICULTY_STYLES = {
+  easy: "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-400",
+  medium: "bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400",
+  hard: "bg-rose-50 text-rose-700 dark:bg-rose-950/30 dark:text-rose-400",
+} as const
+
 // ── Copy brief helper ─────────────────────────────────────────────────────────
 
 function buildBrief(idea: ContentIdea, videoPrompt?: string): string {
@@ -78,9 +83,9 @@ function buildBrief(idea: ContentIdea, videoPrompt?: string): string {
   lines.push(`Type: ${TYPE_META[idea.type].label} | Duration: ${idea.estimatedDuration ?? "—"} | Platform: ${idea.platforms.join(", ")}`)
   lines.push("")
 
-  if ((idea as any).hook) {
+  if (idea.hook) {
     lines.push("## Hook")
-    lines.push((idea as any).hook)
+    lines.push(idea.hook)
     lines.push("")
   }
 
@@ -133,7 +138,7 @@ function buildBrief(idea: ContentIdea, videoPrompt?: string): string {
 
 interface IdeaCardProps {
   idea: ContentIdea
-  onSave: (idea: ContentIdea) => void
+  onSave: (idea: ContentIdea) => Promise<void> | void
   onSchedule: (idea: ContentIdea) => void
   onGenerateVideoPrompt?: (idea: ContentIdea) => Promise<string>
 }
@@ -146,29 +151,45 @@ export function IdeaCard({ idea, onSave, onSchedule, onGenerateVideoPrompt }: Id
   const [isGeneratingPrompt, setIsGeneratingPrompt] = useState(false)
   const [copiedPrompt, setCopiedPrompt] = useState(false)
   const [copiedBrief, setCopiedBrief] = useState(false)
+  const [isSaving, setIsSaving] = useState(false)
 
   const meta = TYPE_META[idea.type]
   const Icon = meta.icon
-  const hook = (idea as any).hook as string | undefined
+  const hook = idea.hook
 
   const hasBreakdown = !!(idea.script || idea.visualDirection || idea.props?.length || idea.sceneBreakdown?.length)
   const sceneCount = idea.sceneBreakdown?.length ?? 0
 
-  const handleSave = () => {
+  useEffect(() => {
+    setSaved(idea.saved ?? false)
+  }, [idea.saved])
+
+  const handleSave = async () => {
+    setIsSaving(true)
     if (saved) {
       setConfirmUnsave(true)
+      setIsSaving(false)
     } else {
-      setSaved(true)
-      toast.success("Idea saved!")
-      onSave({ ...idea, saved: true })
+      try {
+        await onSave({ ...idea, saved: true })
+        setSaved(true)
+        toast.success("Idea saved!")
+      } finally {
+        setIsSaving(false)
+      }
     }
   }
 
-  const handleConfirmUnsave = () => {
-    setSaved(false)
-    toast.success("Removed from saved")
-    onSave({ ...idea, saved: false })
-    setConfirmUnsave(false)
+  const handleConfirmUnsave = async () => {
+    setIsSaving(true)
+    try {
+      await onSave({ ...idea, saved: false })
+      setSaved(false)
+      toast.success("Removed from saved")
+      setConfirmUnsave(false)
+    } finally {
+      setIsSaving(false)
+    }
   }
 
   const handleGenerateVideoPrompt = async () => {
@@ -208,7 +229,7 @@ export function IdeaCard({ idea, onSave, onSchedule, onGenerateVideoPrompt }: Id
         <AlertDialogHeader>
           <AlertDialogTitle>Remove from saved?</AlertDialogTitle>
           <AlertDialogDescription>
-            "{idea.title}" will be removed from your saved ideas. You can always save it again.
+            &quot;{idea.title}&quot; will be removed from your saved ideas. You can always save it again.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
@@ -231,10 +252,25 @@ export function IdeaCard({ idea, onSave, onSchedule, onGenerateVideoPrompt }: Id
               <Badge variant="outline" className={cn("text-[10px] py-0 h-4 px-1.5 font-medium", meta.color)}>
                 {meta.label}
               </Badge>
+              {idea.format && (
+                <Badge variant="outline" className="text-[10px] py-0 h-4 px-1.5 font-medium">
+                  {idea.format}
+                </Badge>
+              )}
               {idea.estimatedDuration && (
                 <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
                   <Clock className="size-2.5" />
                   {idea.estimatedDuration}
+                </span>
+              )}
+              {idea.difficulty && (
+                <span
+                  className={cn(
+                    "inline-flex h-4 items-center rounded-full px-1.5 text-[10px] font-medium capitalize",
+                    DIFFICULTY_STYLES[idea.difficulty]
+                  )}
+                >
+                  {idea.difficulty}
                 </span>
               )}
               {sceneCount > 0 && (
@@ -246,7 +282,7 @@ export function IdeaCard({ idea, onSave, onSchedule, onGenerateVideoPrompt }: Id
             </div>
             <h3 className="text-sm font-semibold leading-snug">{idea.title}</h3>
           </div>
-          <Button variant="ghost" size="icon" className="size-7 shrink-0" onClick={handleSave}>
+          <Button variant="ghost" size="icon" className="size-7 shrink-0" onClick={handleSave} disabled={isSaving}>
             {saved ? (
               <BookmarkCheck className="size-4 text-primary" />
             ) : (
@@ -258,7 +294,7 @@ export function IdeaCard({ idea, onSave, onSchedule, onGenerateVideoPrompt }: Id
 
       <CardContent className="space-y-3 pt-0 flex-1 flex flex-col">
         {/* Description */}
-        <p className="text-xs text-muted-foreground leading-relaxed line-clamp-2">{idea.description}</p>
+        <p className="text-xs text-muted-foreground leading-relaxed whitespace-pre-line">{idea.description}</p>
 
         {/* Hook callout */}
         {hook && (
@@ -267,8 +303,32 @@ export function IdeaCard({ idea, onSave, onSchedule, onGenerateVideoPrompt }: Id
               🎣 Hook
             </p>
             <p className="text-xs text-amber-900 dark:text-amber-200 italic leading-relaxed">
-              "{hook}"
+              &quot;{hook}&quot;
             </p>
+          </div>
+        )}
+
+        {idea.whyItWorks && (
+          <div className="rounded-lg border border-dashed px-3 py-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground mb-0.5">
+              Why It Works
+            </p>
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              {idea.whyItWorks}
+            </p>
+          </div>
+        )}
+
+        {idea.trendingTags && idea.trendingTags.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {idea.trendingTags.map((tag) => (
+              <span
+                key={tag}
+                className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary"
+              >
+                {tag}
+              </span>
+            ))}
           </div>
         )}
 
@@ -377,7 +437,7 @@ export function IdeaCard({ idea, onSave, onSchedule, onGenerateVideoPrompt }: Id
 
           {videoPrompt ? (
             <div className="rounded bg-zinc-950 dark:bg-zinc-900 border border-zinc-800 px-3 py-2">
-              <p className="text-[10px] font-mono leading-relaxed text-zinc-300 line-clamp-3">
+              <p className="text-[10px] font-mono leading-relaxed text-zinc-300 whitespace-pre-line break-words">
                 {videoPrompt}
               </p>
             </div>
@@ -410,8 +470,8 @@ export function IdeaCard({ idea, onSave, onSchedule, onGenerateVideoPrompt }: Id
             <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground mb-1">
               Caption
             </p>
-            <p className="text-xs italic text-muted-foreground line-clamp-2">
-              "{idea.suggestedCaption}"
+            <p className="text-xs italic text-muted-foreground whitespace-pre-line">
+              &quot;{idea.suggestedCaption}&quot;
             </p>
           </div>
         )}

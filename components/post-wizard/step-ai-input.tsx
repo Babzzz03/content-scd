@@ -7,8 +7,7 @@ import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
-import { DUMMY_BRAND_VOICE } from "@/lib/dummy-data"
-import type { ContentTone, Platform, PostType, PostWizardState } from "@/lib/types"
+import type { BrandVoice, ContentTone, Platform, PostType, PostWizardState } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 const TONES: { value: ContentTone; label: string; emoji: string }[] = [
@@ -39,10 +38,11 @@ interface StepAIInputProps {
   postType: PostType | null
   aiInput: PostWizardState["aiInput"]
   hasBrandVoice: boolean
+  brandVoice?: Partial<BrandVoice> | null
   onChange: (updates: Partial<PostWizardState["aiInput"]>) => void
 }
 
-export function StepAIInput({ platform, postType, aiInput, hasBrandVoice, onChange }: StepAIInputProps) {
+export function StepAIInput({ platform, postType, aiInput, hasBrandVoice, brandVoice, onChange }: StepAIInputProps) {
   const usingBrandVoice = aiInput.useBrandVoice && hasBrandVoice
   const generationHintKey = postType ? `${platform}/${postType}` : platform
   const generationHint = PLATFORM_GENERATION_HINTS[generationHintKey]
@@ -88,7 +88,7 @@ export function StepAIInput({ platform, postType, aiInput, hasBrandVoice, onChan
                 </div>
                 <p className="text-xs text-muted-foreground mt-0.5">
                   {usingBrandVoice
-                    ? `AI will use "${DUMMY_BRAND_VOICE.brandName}" — topic becomes optional`
+                    ? `AI will use "${brandVoice?.brandName || "your brand voice"}" — topic becomes optional`
                     : "AI will tailor output to match your brand's tone and messaging"}
                 </p>
               </div>
@@ -102,10 +102,10 @@ export function StepAIInput({ platform, postType, aiInput, hasBrandVoice, onChan
           {usingBrandVoice && (
             <div className="mt-3 pt-3 border-t border-primary/20 grid grid-cols-2 gap-2">
               {[
-                { label: "Brand", value: DUMMY_BRAND_VOICE.brandName },
-                { label: "Industry", value: DUMMY_BRAND_VOICE.industry },
-                { label: "Tone", value: DUMMY_BRAND_VOICE.tone.slice(0, 2).join(", ") },
-                { label: "Audience", value: DUMMY_BRAND_VOICE.targetAudience.substring(0, 40) + "…" },
+                { label: "Brand", value: brandVoice?.brandName || "—" },
+                { label: "Industry", value: brandVoice?.industry || "—" },
+                { label: "Tone", value: brandVoice?.tone?.slice(0, 2).join(", ") || "—" },
+                { label: "Audience", value: brandVoice?.targetAudience ? `${brandVoice.targetAudience.substring(0, 40)}…` : "—" },
               ].map(({ label, value }) => (
                 <div key={label}>
                   <p className="text-[10px] text-muted-foreground uppercase tracking-wide">{label}</p>

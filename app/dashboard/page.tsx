@@ -24,7 +24,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { PostWizard } from "@/components/post-wizard/post-wizard"
 import { usePostsContext } from "@/lib/posts-context"
 import { useUser } from "@/lib/user-context"
-import { DUMMY_PLATFORM_STATS } from "@/lib/dummy-data"
+import { postsApi } from "@/lib/api/posts"
 import { cn } from "@/lib/utils"
 import type { Platform, ScheduledPost } from "@/lib/types"
 
@@ -221,15 +221,33 @@ function DashboardContent() {
   const [createOpen, setCreateOpen] = useState(false)
   const [greeting, setGreeting] = useState("")
   const [todayLabel, setTodayLabel] = useState("")
+  const [stats, setStats] = useState({ scheduled: 0, drafts: 0, published: 0 })
 
   useEffect(() => {
     setGreeting(getGreeting(user.name))
     setTodayLabel(new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" }))
   }, [user.name])
 
-  const scheduled = scheduledPosts.filter((p) => p.status === "scheduled").length + 10
-  const drafts = scheduledPosts.filter((p) => p.status === "draft").length + 6
-  const published = DUMMY_PLATFORM_STATS.reduce((a, s) => a + s.publishedThisWeek, 0)
+  useEffect(() => {
+    postsApi.getStats().then((res) => {
+      setStats({
+        scheduled: res.data.scheduled,
+        drafts: res.data.drafts,
+        published: res.data.published,
+      })
+    }).catch(() => {
+      // Fall back to local counts
+      setStats({
+        scheduled: scheduledPosts.filter((p) => p.status === "scheduled").length,
+        drafts: scheduledPosts.filter((p) => p.status === "draft").length,
+        published: 0,
+      })
+    })
+  }, [scheduledPosts])
+
+  const scheduled = stats.scheduled
+  const drafts = stats.drafts
+  const published = stats.published
 
   return (
     <div className="flex flex-col h-full">
@@ -303,7 +321,8 @@ function DashboardContent() {
             <h2 className="text-sm font-semibold mb-2.5">Your Platforms</h2>
             <div className="space-y-2">
               {PLATFORMS.map((p) => {
-                const stats = DUMMY_PLATFORM_STATS.find((s) => s.platform === p.id)
+                const platformScheduled = scheduledPosts.filter((s) => s.platform === p.id && s.status === "scheduled").length
+                const platformDrafts = scheduledPosts.filter((s) => s.platform === p.id && s.status === "draft").length
                 return (
                   <Link key={p.id} href={p.href}
                     className="flex items-center gap-3 rounded-xl border bg-card px-4 py-3 hover:bg-accent/50 active:scale-[0.99] transition-all group"
@@ -316,8 +335,8 @@ function DashboardContent() {
                       <p className="text-[11px] text-muted-foreground mt-0.5">{p.tagline}</p>
                     </div>
                     <div className="text-right shrink-0">
-                      <p className="text-xs font-semibold">{stats?.scheduledCount ?? 0} scheduled</p>
-                      <p className="text-[10px] text-muted-foreground">{stats?.draftCount ?? 0} drafts</p>
+                      <p className="text-xs font-semibold">{platformScheduled} scheduled</p>
+                      <p className="text-[10px] text-muted-foreground">{platformDrafts} drafts</p>
                     </div>
                     <ChevronRight className="size-4 text-muted-foreground group-hover:text-foreground group-hover:translate-x-0.5 transition-all shrink-0 ml-1" />
                   </Link>

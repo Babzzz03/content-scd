@@ -391,17 +391,18 @@ function ScheduleContent() {
     setRescheduleTarget(null)
   }
 
-  const handleDuplicate = (id: string) => {
-    const copy = duplicatePost(id)
-    if (copy) {
-      toast.success("Post duplicated", {
-        description: `Copy scheduled for ${copy.scheduledAt.toLocaleString("en-US", {
-          month: "short",
-          day: "numeric",
-          hour: "numeric",
-          minute: "2-digit",
-        })} (+1 hour)`,
-      })
+  const handleDuplicate = async (id: string) => {
+    try {
+      const copy = await duplicatePost(id)
+      if (copy) {
+        toast.success("Post duplicated", {
+          description: `Copy scheduled for ${copy.scheduledAt.toLocaleString("en-US", {
+            month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+          })} (+1 hour)`,
+        })
+      }
+    } catch {
+      toast.error("Failed to duplicate post")
     }
   }
 

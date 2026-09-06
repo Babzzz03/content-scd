@@ -30,6 +30,7 @@ const PLATFORM_COLORS: Record<Platform, string> = {
 const STATUS_STYLES: Record<string, string> = {
   scheduled: "bg-blue-50 text-blue-700 dark:bg-blue-950/30 dark:text-blue-400",
   draft: "bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400",
+  publishing: "bg-purple-50 text-purple-700 dark:bg-purple-950/30 dark:text-purple-400",
   published: "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-400",
   failed: "bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-400",
 }

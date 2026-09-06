@@ -1,6 +1,6 @@
 "use client"
 
-import { useRef, useState } from "react"
+import { useState, type MutableRefObject, type ElementType } from "react"
 import {
   Hash,
   CalendarDays,
@@ -17,6 +17,9 @@ import {
   Eye,
   EyeOff,
   Upload,
+  RefreshCw,
+  Loader2,
+  Zap,
 } from "lucide-react"
 import { FlyerCanvas } from "@/components/post-wizard/flyer-canvas"
 import type { FlyerCanvasHandle } from "@/components/post-wizard/flyer-canvas"
@@ -33,11 +36,18 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
-import type { Platform, PostWizardState, GeneratedPostContent, FlyerContent } from "@/lib/types"
+import type { Platform, PostWizardState, GeneratedPostContent, FlyerContent, FlyerTemplate } from "@/lib/types"
 import { FLYER_FONTS, PLATFORM_CONFIG } from "@/lib/types"
+
+// Ideal aspect ratio per platform + post type for final exported images
+const PLATFORM_ASPECT: Partial<Record<Platform, Partial<Record<string, FlyerTemplate["aspectRatio"]>>>> = {
+  instagram: { single: "4:5", carousel: "4:5", story: "9:16", reel: "9:16" },
+  x:         { single: "4:5", thread: "4:5", image: "4:5" },
+  linkedin:  { single: "1:1", text: "1:1", image: "1:1", carousel: "1:1", article: "16:9" },
+}
 import { toast } from "sonner"
 
-const PLATFORM_ICONS: Record<Platform, React.ElementType> = {
+const PLATFORM_ICONS: Record<Platform, ElementType> = {
   x: XIcon,
   linkedin: LinkedInIcon,
   instagram: InstagramIcon,
@@ -52,6 +62,7 @@ const PLATFORM_LABELS: Record<Platform, string> = {
 interface StepPreviewProps {
   state: PostWizardState
   content: GeneratedPostContent
+  flyerRefs: MutableRefObject<(FlyerCanvasHandle | null)[]>
   onUpdateCaption: (caption: string) => void
   onUpdateFlyer: (idx: number, updates: Partial<FlyerContent>) => void
   onAddFlyer: () => void
@@ -62,15 +73,20 @@ interface StepPreviewProps {
   onDeleteThreadPost: (idx: number) => void
   onSetLogo: (file: File, url: string) => void
   onClearLogo: () => void
+  onPublishNow?: () => void
+  isPublishing?: boolean
   onSchedule: () => void
   onSaveDraft: () => void
   onDuplicate: () => void
+  onSelectVariation: (idx: number) => void
 }
 
 export function StepPreview({
   state,
   content,
+  flyerRefs,
   onUpdateCaption,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   onUpdateFlyer,
   onAddFlyer,
   onAddCustomFlyer,
@@ -80,18 +96,36 @@ export function StepPreview({
   onDeleteThreadPost,
   onSetLogo,
   onClearLogo,
+  onPublishNow,
+  isPublishing,
   onSchedule,
   onSaveDraft,
   onDuplicate,
+  onSelectVariation,
 }: StepPreviewProps) {
   const [activeFlyerIdx, setActiveFlyerIdx] = useState(0)
   const [showFullView, setShowFullView] = useState(false)
   const [isDownloading, setIsDownloading] = useState(false)
 
-  const flyerRef = useRef<FlyerCanvasHandle>(null)
-
   const PlatformIcon = PLATFORM_ICONS[state.platform]
   const cfg = PLATFORM_CONFIG[state.platform]
+
+  // Return the correct background URL for flyer at position `index`.
+  // Slide 0 uses the main uploaded background; slides 1..N use the extra
+  // per-slide backgrounds from imagePreviewUrls[index-1].
+  const getFlyerBg = (flyer: FlyerContent, index: number): string | null => {
+    if (flyer.imageUrl != null) return flyer.imageUrl
+    if (index === 0) return state.imagePreviewUrl
+    return state.imagePreviewUrls[index - 1] ?? state.imagePreviewUrl ?? null
+  }
+
+  // Override template aspect ratio to match the target platform + post type so
+  // the exported PNG has the correct dimensions for that platform.
+  const effectiveAspectRatio: FlyerTemplate["aspectRatio"] =
+    (state.postType ? PLATFORM_ASPECT[state.platform]?.[state.postType] : undefined) ?? state.selectedFlyer?.aspectRatio ?? "1:1"
+  const effectiveTemplate: FlyerTemplate | null = state.selectedFlyer
+    ? { ...state.selectedFlyer, aspectRatio: effectiveAspectRatio }
+    : null
 
   // Clamp active index
   const safeIdx     = Math.min(activeFlyerIdx, Math.max(0, content.flyers.length - 1))
@@ -114,9 +148,10 @@ export function StepPreview({
         toast.success("Flyer downloaded")
         return
       }
-      if (!flyerRef.current) return
+      const handle = flyerRefs.current[safeIdx]
+      if (!handle) return
       const safeName = (activeFlyer?.text ?? "flyer").slice(0, 20).replace(/\s+/g, "-").toLowerCase()
-      await flyerRef.current.downloadImage(`${safeName}-flyer-${safeIdx + 1}.png`)
+      await handle.downloadImage(`${safeName}-flyer-${safeIdx + 1}.png`)
       toast.success("Flyer downloaded")
     } catch (err) {
       console.error("[DOWNLOAD]", err)
@@ -244,10 +279,8 @@ export function StepPreview({
                     />
                   ) : (
                     <FlyerCanvas
-                      ref={flyerRef}
-                      enableDownload
-                      template={state.selectedFlyer}
-                      imageUrl={activeFlyer.imageUrl ?? state.imagePreviewUrl}
+                      template={effectiveTemplate!}
+                      imageUrl={getFlyerBg(activeFlyer, safeIdx)}
                       text={activeFlyer.text}
                       subtext={activeFlyer.subtext}
                       fontFamily={activeFlyer.fontFamily}
@@ -584,6 +617,70 @@ export function StepPreview({
               )}
             </>
           )}
+
+          {/* Hidden FlyerCanvas for EVERY flyer (including active) at platform-correct ratio.
+              The visible preview above uses the template's native ratio for proportional display;
+              these hidden canvases are what captureMedia actually reads for upload. */}
+          {state.selectedFlyer && content.flyers.map((f, i) => {
+            if (f.customImageUrl) return null
+            return (
+              <div
+                key={f.id}
+                aria-hidden="true"
+                style={{ position: "fixed", left: -9999, top: 0, width: 200, overflow: "hidden", opacity: 0, pointerEvents: "none", zIndex: -1 }}
+              >
+                <FlyerCanvas
+                  ref={(el) => { flyerRefs.current[i] = el }}
+                  enableDownload
+                  template={effectiveTemplate!}
+                  imageUrl={getFlyerBg(f, i)}
+                  text={f.text}
+                  subtext={f.subtext}
+                  fontFamily={f.fontFamily}
+                  headlineColor={f.headlineColor}
+                  accentColor={f.accentColor}
+                  categoryLabel={f.categoryLabel}
+                  logoUrl={state.logoPreviewUrl}
+                  hideTag={f.hideTag}
+                  hideHeadline={f.hideHeadline}
+                  hideSubtext={f.hideSubtext}
+                  hideLogo={f.hideLogo}
+                />
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {/* ── Single uploaded image (no flyer / no custom flyer) ────────────────── */}
+      {!state.selectedFlyer && !state.customFlyerPreviewUrl && state.imagePreviewUrl && (
+        <div className="relative rounded-xl overflow-hidden border">
+          <img src={state.imagePreviewUrl} alt="Uploaded image" className="w-full max-h-64 object-contain bg-muted/20" />
+          <div className="absolute bottom-0 left-0 right-0 bg-linear-to-t from-black/50 to-transparent px-3 py-2">
+            <p className="text-[11px] text-white font-medium flex items-center gap-1.5">
+              <ImageIcon className="size-3" />
+              Your image
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* ── Carousel images (no flyer template — plain multi-image carousel) ─────── */}
+      {!state.selectedFlyer && !state.customFlyerPreviewUrl && state.imagePreviewUrls.length > 0 && (
+        <div className="space-y-2">
+          <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">
+            Carousel images
+          </span>
+          <div className="grid grid-cols-3 gap-2">
+            {state.imagePreviewUrls.map((url, idx) => (
+              <div key={idx} className="relative aspect-square rounded-lg overflow-hidden border bg-muted">
+                <img src={url} alt={`Slide ${idx + 1}`} className="w-full h-full object-cover" />
+                <div className="absolute bottom-0 left-0 right-0 bg-black/50 py-0.5 px-1">
+                  <p className="text-[10px] text-white text-center">Slide {idx + 1}</p>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -604,10 +701,10 @@ export function StepPreview({
                 alt={`Flyer ${safeIdx + 1}`}
                 className="w-full rounded-xl shadow-lg block"
               />
-            ) : state.selectedFlyer ? (
+            ) : effectiveTemplate ? (
               <FlyerCanvas
-                template={state.selectedFlyer}
-                imageUrl={activeFlyer.imageUrl ?? state.imagePreviewUrl}
+                template={effectiveTemplate}
+                imageUrl={getFlyerBg(activeFlyer, safeIdx)}
                 text={activeFlyer.text}
                 subtext={activeFlyer.subtext}
                 fontFamily={activeFlyer.fontFamily}
@@ -719,6 +816,45 @@ export function StepPreview({
         </div>
       )}
 
+      {/* ── Variation picker (shown when AI returned multiple options) ─────────── */}
+      {content.variations && content.variations.length > 1 && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <RefreshCw className="size-3.5 text-muted-foreground" />
+            <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">
+              AI Variations · {content.variations.length} options
+            </span>
+          </div>
+          <div className="flex gap-2 flex-wrap">
+            {content.variations.map((v, i) => {
+              const isActive = content.caption === v.caption
+              return (
+                <button
+                  key={i}
+                  onClick={() => onSelectVariation(i)}
+                  className={cn(
+                    "group flex-1 min-w-[120px] rounded-lg border px-3 py-2.5 text-left transition-colors",
+                    isActive
+                      ? "border-primary bg-primary/5"
+                      : "border-border hover:border-primary/50 hover:bg-muted/50"
+                  )}
+                >
+                  <p className={cn(
+                    "text-[10px] font-semibold mb-1",
+                    isActive ? "text-primary" : "text-muted-foreground"
+                  )}>
+                    Option {i + 1}{isActive && " · Active"}
+                  </p>
+                  <p className="text-[11px] leading-snug line-clamp-2 text-foreground/80">
+                    {v.caption.slice(0, 80)}{v.caption.length > 80 ? "…" : ""}
+                  </p>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
       {/* ── Caption / Tweet / Post ─────────────────────────────────────────────── */}
       {state.postType !== "thread" && (
         <div className="space-y-2">
@@ -782,6 +918,20 @@ export function StepPreview({
       <Separator />
 
       {/* ── Actions ──────────────────────────────────────────────────────────── */}
+      {onPublishNow && (
+        <Button
+          onClick={onPublishNow}
+          disabled={isPublishing}
+          className="w-full bg-emerald-600 hover:bg-emerald-700 text-white"
+        >
+          {isPublishing ? (
+            <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+          ) : (
+            <Zap data-icon="inline-start" />
+          )}
+          {isPublishing ? "Publishing…" : "Publish Now"}
+        </Button>
+      )}
       <div className="grid grid-cols-3 gap-2">
         <Button onClick={onSchedule} className="col-span-3 sm:col-span-1">
           <CalendarDays data-icon="inline-start" />

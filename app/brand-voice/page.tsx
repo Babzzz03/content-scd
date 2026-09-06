@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import {
   Mic2,
   Plus,
@@ -16,6 +16,7 @@ import {
   Hash,
   CheckCircle2,
   BookOpen,
+  RotateCcw,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -23,11 +24,9 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
-import { Separator } from "@/components/ui/separator"
-import { Switch } from "@/components/ui/switch"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { analyzeBrandVoice } from "@/lib/ai-mock"
-import { DUMMY_BRAND_VOICE } from "@/lib/dummy-data"
+import { brandVoiceApi, createEmptyBrandVoice } from "@/lib/api/brand-voice"
 import type { BrandVoice, ContentTone } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
@@ -44,14 +43,56 @@ const TONES: { value: ContentTone; label: string; description: string }[] = [
 ]
 
 export default function BrandVoicePage() {
-  const [brand, setBrand] = useState<Partial<BrandVoice>>(DUMMY_BRAND_VOICE)
+  const [brand, setBrand] = useState<Partial<BrandVoice>>(createEmptyBrandVoice())
+  const [savedBrand, setSavedBrand] = useState<Partial<BrandVoice>>(createEmptyBrandVoice())
+  const [fieldBackups, setFieldBackups] = useState<Partial<Record<keyof BrandVoice, unknown>>>({})
   const [isEditing, setIsEditing] = useState(false)
   const [isAnalyzing, setIsAnalyzing] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
+  const [isSaving, setIsSaving] = useState(false)
   const [newKeyMessage, setNewKeyMessage] = useState("")
   const [newCompetitor, setNewCompetitor] = useState("")
 
+  useEffect(() => {
+    const loadBrandVoice = async () => {
+      setIsLoading(true)
+      try {
+        const data = await brandVoiceApi.get()
+        setBrand(data)
+        setSavedBrand(data)
+      } catch {
+        const empty = createEmptyBrandVoice()
+        setBrand(empty)
+        setSavedBrand(empty)
+        toast.error("Failed to load brand voice")
+      } finally {
+        setIsLoading(false)
+      }
+    }
+
+    loadBrandVoice()
+  }, [])
+
   const updateBrand = (updates: Partial<BrandVoice>) => {
     setBrand((prev) => ({ ...prev, ...updates }))
+  }
+
+  const hasFieldBackup = (field: keyof BrandVoice) =>
+    Object.prototype.hasOwnProperty.call(fieldBackups, field)
+
+  const revertField = (field: keyof BrandVoice) => {
+    if (!hasFieldBackup(field)) return
+    updateBrand({ [field]: fieldBackups[field] as never })
+    setFieldBackups((prev) => {
+      const next = { ...prev }
+      delete next[field]
+      return next
+    })
+  }
+
+  const normalizeSuggestedTones = (values: string[] = []): ContentTone[] => {
+    const valid = TONES.map((tone) => tone.value)
+    return values.filter((value): value is ContentTone => valid.includes(value as ContentTone))
   }
 
   const toggleTone = (tone: ContentTone) => {
@@ -91,14 +132,51 @@ export default function BrandVoicePage() {
 
     setIsAnalyzing(true)
     try {
-      const description = `${brand.brandName}: ${brand.styleNotes ?? brand.tagline ?? ""}`
-      const result = await analyzeBrandVoice(description)
-      updateBrand({
-        keyMessages: result.suggestedMessages,
-        styleNotes: result.styleNotes,
+      const result = await analyzeBrandVoice({
+        brandName: brand.brandName,
+        industry: brand.industry,
+        targetAudience: brand.targetAudience,
+        keyMessages: brand.keyMessages,
+        tone: brand.tone,
+        competitors: brand.competitors,
+        description: brand.description,
+        tagline: brand.tagline,
+        styleNotes: brand.styleNotes,
       })
+
+      const nextBackups: Partial<Record<keyof BrandVoice, unknown>> = {}
+      const nextUpdates: Partial<BrandVoice> = {}
+
+      const setGeneratedField = <K extends keyof BrandVoice>(field: K, value: BrandVoice[K] | undefined) => {
+        if (value === undefined) return
+        if (Array.isArray(value) && value.length === 0) return
+        if (typeof value === "string" && value.trim().length === 0) return
+        const current = brand[field]
+        if (JSON.stringify(current) === JSON.stringify(value)) return
+        nextBackups[field] = current
+        nextUpdates[field] = value
+      }
+
+      setGeneratedField("brandName", result.brandName)
+      setGeneratedField("industry", result.industry)
+      setGeneratedField("tagline", result.tagline)
+      setGeneratedField("description", result.description)
+      setGeneratedField("targetAudience", result.targetAudience)
+      setGeneratedField("tone", normalizeSuggestedTones(result.suggestedTones))
+      setGeneratedField("keyMessages", result.suggestedMessages)
+      setGeneratedField("styleNotes", result.styleNotes)
+      setGeneratedField("personalityAdjectives", result.personalityAdjectives)
+      setGeneratedField("languageToUse", result.languageToUse)
+      setGeneratedField("languageToAvoid", result.languageToAvoid)
+      setGeneratedField("emojiGuideline", result.emojiGuideline)
+      setGeneratedField("hashtagStrategy", result.hashtagStrategy)
+      setGeneratedField("platformNotes", result.platformNotes as Partial<Record<"x" | "linkedin" | "instagram", string>>)
+
+      setFieldBackups((prev) => ({ ...prev, ...nextBackups }))
+      updateBrand(nextUpdates)
+
       toast.success("AI analysis complete!", {
-        description: "Key messages and style notes updated",
+        description: "Generated suggestions have been applied. Use Revert on any field if needed.",
       })
     } catch {
       toast.error("Analysis failed. Please try again.")
@@ -107,14 +185,48 @@ export default function BrandVoicePage() {
     }
   }
 
-  const handleSave = () => {
-    const payload = { ...brand, updatedAt: new Date() }
-    console.log("[BRAND VOICE] Save:", payload)
+  const handleCancel = () => {
+    setBrand(savedBrand)
+    setFieldBackups({})
     setIsEditing(false)
-    toast.success("Brand Voice saved!", {
-      description: "Your brand profile has been updated",
-    })
   }
+
+  const handleSave = async () => {
+    setIsSaving(true)
+    try {
+      const saved = await brandVoiceApi.save(brand)
+      setBrand(saved)
+      setSavedBrand(saved)
+      setFieldBackups({})
+      setIsEditing(false)
+      toast.success("Brand Voice saved!", {
+        description: "Your brand profile has been updated",
+      })
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to save brand voice")
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  if (isLoading) {
+    return (
+      <div className="flex flex-1 items-center justify-center">
+        <div className="flex items-center gap-3 text-sm text-muted-foreground">
+          <Loader2 className="size-4 animate-spin" />
+          Loading brand voice...
+        </div>
+      </div>
+    )
+  }
+
+  const RevertButton = ({ field }: { field: keyof BrandVoice }) =>
+    isEditing && hasFieldBackup(field) ? (
+      <Button variant="ghost" size="sm" className="h-6 px-2 text-[10px]" onClick={() => revertField(field)}>
+        <RotateCcw className="size-3" />
+        Revert
+      </Button>
+    ) : null
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
@@ -127,19 +239,19 @@ export default function BrandVoicePage() {
           <div className="min-w-0">
             <h1 className="text-base sm:text-xl font-semibold leading-tight">Brand Voice</h1>
             <p className="text-xs text-muted-foreground mt-0.5 line-clamp-1 sm:line-clamp-none">
-              Define your brand's personality to power smarter AI content
+              Define your brand&apos;s personality to power smarter AI content
             </p>
           </div>
         </div>
         <div className="flex gap-2 shrink-0">
           {isEditing ? (
             <>
-              <Button variant="outline" size="sm" onClick={() => setIsEditing(false)}>
+              <Button variant="outline" size="sm" onClick={handleCancel} disabled={isSaving}>
                 Cancel
               </Button>
-              <Button size="sm" onClick={handleSave}>
-                <Save data-icon="inline-start" />
-                Save Profile
+              <Button size="sm" onClick={handleSave} disabled={isSaving}>
+                {isSaving ? <Loader2 className="size-4 animate-spin" /> : <Save data-icon="inline-start" />}
+                {isSaving ? "Saving..." : "Save Profile"}
               </Button>
             </>
           ) : (
@@ -158,7 +270,7 @@ export default function BrandVoicePage() {
             <CheckCircle2 className="size-4 text-emerald-600" />
             <AlertDescription className="text-sm text-emerald-700 dark:text-emerald-400">
               <span className="font-medium">Brand Voice is active.</span> AI will use this profile
-              when "Use Brand Voice" is toggled on in post creation or content ideas.
+              when &quot;Use Brand Voice&quot; is toggled on in post creation or content ideas.
             </AlertDescription>
           </Alert>
         )}
@@ -179,9 +291,12 @@ export default function BrandVoicePage() {
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <div className="space-y-2">
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2">
                     <Label htmlFor="brand-name">Brand name</Label>
-                    <Input
+                    <RevertButton field="brandName" />
+                  </div>
+                  <Input
                       id="brand-name"
                       placeholder="Nova Studio"
                       value={brand.brandName ?? ""}
@@ -190,7 +305,10 @@ export default function BrandVoicePage() {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="industry">Industry / Niche</Label>
+                    <div className="flex items-center justify-between gap-2">
+                      <Label htmlFor="industry">Industry / Niche</Label>
+                      <RevertButton field="industry" />
+                    </div>
                     <Input
                       id="industry"
                       placeholder="Digital Marketing, SaaS, Fitness..."
@@ -201,10 +319,13 @@ export default function BrandVoicePage() {
                   </div>
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="tagline">
-                    Tagline{" "}
-                    <span className="text-muted-foreground text-xs">(optional)</span>
-                  </Label>
+                  <div className="flex items-center justify-between gap-2">
+                    <Label htmlFor="tagline">
+                      Tagline{" "}
+                      <span className="text-muted-foreground text-xs">(optional)</span>
+                    </Label>
+                    <RevertButton field="tagline" />
+                  </div>
                   <Input
                     id="tagline"
                     placeholder="e.g. Ideas that move people"
@@ -229,7 +350,10 @@ export default function BrandVoicePage() {
               </CardHeader>
               <CardContent>
                 <div className="space-y-2">
-                  <Label htmlFor="brand-description">Brand description</Label>
+                  <div className="flex items-center justify-between gap-2">
+                    <Label htmlFor="brand-description">Brand description</Label>
+                    <RevertButton field="description" />
+                  </div>
                   <Textarea
                     id="brand-description"
                     placeholder={`Tell the AI about your brand. For example:\n\n"We are a fitness coaching brand helping busy professionals build sustainable workout habits. We offer 1-on-1 online coaching, a 12-week transformation programme, and a community app."`}
@@ -263,7 +387,10 @@ export default function BrandVoicePage() {
               </CardHeader>
               <CardContent>
                 <div className="space-y-2">
-                  <Label htmlFor="audience">Who are you speaking to?</Label>
+                  <div className="flex items-center justify-between gap-2">
+                    <Label htmlFor="audience">Who are you speaking to?</Label>
+                    <RevertButton field="targetAudience" />
+                  </div>
                   <Textarea
                     id="audience"
                     placeholder="e.g. Entrepreneurs and small business owners aged 25-45 who want to grow their digital presence..."
@@ -286,7 +413,10 @@ export default function BrandVoicePage() {
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="space-y-2">
-                  <Label htmlFor="style-notes">How should the AI write for you?</Label>
+                  <div className="flex items-center justify-between gap-2">
+                    <Label htmlFor="style-notes">How should the AI write for you?</Label>
+                    <RevertButton field="styleNotes" />
+                  </div>
                   <Textarea
                     id="style-notes"
                     placeholder="e.g. Avoid corporate language. Use short, punchy sentences. Include rhetorical questions. Speak like a trusted expert friend..."
@@ -336,9 +466,12 @@ export default function BrandVoicePage() {
             {/* Tone */}
             <Card>
               <CardHeader className="pb-3">
-                <div className="flex items-center gap-2">
-                  <MessageSquare className="size-4 text-primary" />
-                  <CardTitle className="text-sm">Tone of Voice</CardTitle>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <MessageSquare className="size-4 text-primary" />
+                    <CardTitle className="text-sm">Tone of Voice</CardTitle>
+                  </div>
+                  <RevertButton field="tone" />
                 </div>
                 <CardDescription className="text-xs">
                   Select all tones that represent your brand (you can pick multiple)
@@ -375,9 +508,12 @@ export default function BrandVoicePage() {
             {/* Key messages */}
             <Card>
               <CardHeader className="pb-3">
-                <div className="flex items-center gap-2">
-                  <Hash className="size-4 text-primary" />
-                  <CardTitle className="text-sm">Key Messages</CardTitle>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Hash className="size-4 text-primary" />
+                    <CardTitle className="text-sm">Key Messages</CardTitle>
+                  </div>
+                  <RevertButton field="keyMessages" />
                 </div>
                 <CardDescription className="text-xs">
                   Core statements the AI will weave into your content
@@ -414,6 +550,102 @@ export default function BrandVoicePage() {
                     <Button variant="outline" size="sm" onClick={addKeyMessage}>
                       <Plus className="size-4" />
                     </Button>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="size-4 text-primary" />
+                    <CardTitle className="text-sm">AI Voice Profile</CardTitle>
+                  </div>
+                  <div className="flex gap-1">
+                    <RevertButton field="personalityAdjectives" />
+                    <RevertButton field="languageToUse" />
+                    <RevertButton field="languageToAvoid" />
+                    <RevertButton field="emojiGuideline" />
+                    <RevertButton field="hashtagStrategy" />
+                    <RevertButton field="platformNotes" />
+                  </div>
+                </div>
+                <CardDescription className="text-xs">
+                  Additional generated guidance from the AI brand analysis
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {(brand.personalityAdjectives ?? []).length > 0 && (
+                  <div className="space-y-2">
+                    <Label>Personality Adjectives</Label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {(brand.personalityAdjectives ?? []).map((item) => (
+                        <Badge key={item} variant="secondary" className="text-xs">
+                          {item}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {(brand.languageToUse ?? []).length > 0 && (
+                  <div className="space-y-2">
+                    <Label>Language To Use</Label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {(brand.languageToUse ?? []).map((item) => (
+                        <Badge key={item} variant="outline" className="text-xs">
+                          {item}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {(brand.languageToAvoid ?? []).length > 0 && (
+                  <div className="space-y-2">
+                    <Label>Language To Avoid</Label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {(brand.languageToAvoid ?? []).map((item) => (
+                        <Badge key={item} variant="outline" className="text-xs">
+                          {item}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {brand.emojiGuideline && (
+                  <div className="space-y-2">
+                    <Label>Emoji Guideline</Label>
+                    <p className="text-sm text-muted-foreground leading-relaxed">{brand.emojiGuideline}</p>
+                  </div>
+                )}
+
+                {brand.hashtagStrategy && (
+                  <div className="space-y-2">
+                    <Label>Hashtag Strategy</Label>
+                    <p className="text-sm text-muted-foreground leading-relaxed">{brand.hashtagStrategy}</p>
+                  </div>
+                )}
+
+                {brand.platformNotes && Object.values(brand.platformNotes).some(Boolean) && (
+                  <div className="space-y-2">
+                    <Label>Platform Notes</Label>
+                    <div className="space-y-2">
+                      {(["x", "linkedin", "instagram"] as const).map((platform) =>
+                        brand.platformNotes?.[platform] ? (
+                          <div key={platform} className="rounded-lg border bg-muted/40 px-3 py-2">
+                            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                              {platform}
+                            </p>
+                            <p className="mt-1 text-sm text-muted-foreground leading-relaxed">
+                              {brand.platformNotes[platform]}
+                            </p>
+                          </div>
+                        ) : null
+                      )}
+                    </div>
                   </div>
                 )}
               </CardContent>

@@ -5,10 +5,10 @@ import { cn } from "@/lib/utils"
 import type { FlyerTemplate } from "@/lib/types"
 
 const BASE_DIMS: Record<FlyerTemplate["aspectRatio"], { w: number; h: number }> = {
-  "1:1":  { w: 400, h: 400 },
-  "4:5":  { w: 400, h: 500 },
-  "9:16": { w: 360, h: 640 },
-  "16:9": { w: 640, h: 360 },
+  "1:1":  { w: 540, h: 540 },   // → 1080×1080 at pixelRatio 2 (Instagram square)
+  "4:5":  { w: 540, h: 675 },   // → 1080×1350 at pixelRatio 2 (Instagram portrait)
+  "9:16": { w: 540, h: 960 },   // → 1080×1920 at pixelRatio 2 (Stories/Reels)
+  "16:9": { w: 600, h: 338 },   // → 1200×675  at pixelRatio 2 (X/Twitter)
 }
 
 const BOTTOM_GRADIENT = "linear-gradient(to top, rgba(0,0,0,.97) 0%, rgba(0,0,0,.88) 18%, rgba(0,0,0,.55) 35%, rgba(0,0,0,.1) 55%, transparent 72%)"
@@ -58,7 +58,7 @@ interface LayoutProps {
 
 function BgImage({ src, fallback }: { src?: string | null; fallback: string }) {
   return src
-    ? <img src={src} alt="" style={{ position:"absolute", inset:0, width:"100%", height:"100%", objectFit:"cover" }} crossOrigin="anonymous" />
+    ? <img src={src} alt="" style={{ position:"absolute", inset:0, width:"100%", height:"100%", objectFit:"cover" }} />
     : <div style={{ position:"absolute", inset:0, background:fallback }} />
 }
 
@@ -129,7 +129,7 @@ function EditorialLight({ w, h, imageUrl, text, template, fontFamily, accentColo
   return (
     <div style={{ width:w, height:h, position:"relative", overflow:"hidden", background:"#f8fafc", fontFamily:font }}>
       <div style={{ position:"absolute", inset:0, background:"linear-gradient(145deg,#f8fafc 0%,#f1f5f9 55%,#e2e8f0 100%)" }} />
-      {imageUrl && <img src={imageUrl} alt="" style={{ position:"absolute", inset:0, width:"100%", height:"100%", objectFit:"cover", opacity:.12 }} crossOrigin="anonymous" />}
+      {imageUrl && <img src={imageUrl} alt="" style={{ position:"absolute", inset:0, width:"100%", height:"100%", objectFit:"cover", opacity:.12 }} />}
       <div style={{ position:"absolute", top:-24, right:-24, width:150, height:150, background:accent, opacity:.07, borderRadius:"50%" }} />
       <div style={{ position:"absolute", bottom:-30, left:-30, width:110, height:110, background:accent, opacity:.05, borderRadius:"50%" }} />
       {(!hideTag || !hideLogo) && (
@@ -328,6 +328,7 @@ const LAYOUT_COMPONENTS: Record<string, React.ComponentType<LayoutProps>> = {
 // ─── Public handle ────────────────────────────────────────────────────────────
 export interface FlyerCanvasHandle {
   downloadImage: (filename?: string) => Promise<void>
+  captureAsFile: (filename?: string) => Promise<File | null>
 }
 
 interface FlyerCanvasProps {
@@ -366,33 +367,50 @@ export const FlyerCanvas = forwardRef<FlyerCanvasHandle, FlyerCanvasProps>(funct
     return () => ro.disconnect()
   }, [])
 
+  const captureDataUrl = async (): Promise<string> => {
+    const source = nativeRef.current
+    if (!source) throw new Error("[FlyerCanvas] enableDownload prop must be true")
+    const { w: bW, h: bH } = BASE_DIMS[template.aspectRatio]
+
+    // The Dialog uses CSS transform (-translate-x-1/2 -translate-y-1/2) which makes
+    // position:fixed children position relative to the dialog, not the viewport.
+    // We clone the rendered HTML and mount it directly on document.body to escape
+    // the transform containment, then capture it there.
+    const temp = document.createElement("div")
+    // Position off the left edge at opacity:1 so html-to-image captures at full fidelity.
+    // (opacity tricks bake into the output; left:-9999 on body-level is safe since there
+    // is no transform ancestor to distort it like there is inside the Dialog.)
+    temp.style.cssText = `position:fixed;left:-${bW + 100}px;top:0;width:${bW}px;height:${bH}px;z-index:99999;pointer-events:none;overflow:hidden;`
+    temp.innerHTML = source.innerHTML
+    document.body.appendChild(temp)
+
+    // Wait for images inside the cloned node to fully load
+    await Promise.all(
+      Array.from(temp.querySelectorAll("img")).map(
+        (img) => img.complete
+          ? Promise.resolve()
+          : new Promise<void>(r => { img.onload = () => r(); img.onerror = () => r() })
+      )
+    )
+
+    // Move into viewport right before capture — html-to-image needs the element
+    // to be composited by the browser (off-screen elements may not be painted).
+    // Briefly visible at top-left; removed immediately after capture.
+    temp.style.left = "0px"
+    await new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r())))
+
+    try {
+      const { toPng } = await import("html-to-image")
+      return await toPng(temp, { width: bW, height: bH, pixelRatio: 2 })
+    } finally {
+      document.body.removeChild(temp)
+    }
+  }
+
   useImperativeHandle(ref, () => ({
     async downloadImage(filename = "flyer.png") {
-      const target = nativeRef.current
-      if (!target) { console.warn("[FlyerCanvas] enableDownload prop must be true"); return }
-
-      const { w: bW, h: bH } = BASE_DIMS[template.aspectRatio]
-
-      // html-to-image requires the element to be in the visible viewport to render
-      // correctly. We briefly move it to (0,0) with near-zero opacity, capture, then
-      // restore — this avoids the blank-PNG issue caused by off-screen rendering.
-      const saved = {
-        left:    target.style.left,
-        top:     target.style.top,
-        opacity: target.style.opacity,
-        zIndex:  target.style.zIndex,
-      }
-      target.style.left    = "0px"
-      target.style.top     = "0px"
-      target.style.opacity = "0.01"   // invisible to user but composited by browser
-      target.style.zIndex  = "9999"
-
-      // Two animation frames ensure the browser has painted the moved element
-      await new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r())))
-
       try {
-        const { toPng } = await import("html-to-image")
-        const dataUrl = await toPng(target, { width: bW, height: bH, pixelRatio: 2 })
+        const dataUrl = await captureDataUrl()
         const link = document.createElement("a")
         link.download = filename
         link.href = dataUrl
@@ -400,11 +418,17 @@ export const FlyerCanvas = forwardRef<FlyerCanvasHandle, FlyerCanvasProps>(funct
       } catch (err) {
         console.error("[FlyerCanvas] download error:", err)
         throw err
-      } finally {
-        target.style.left    = saved.left
-        target.style.top     = saved.top
-        target.style.opacity = saved.opacity
-        target.style.zIndex  = saved.zIndex
+      }
+    },
+    async captureAsFile(filename = "flyer.png"): Promise<File | null> {
+      try {
+        const dataUrl = await captureDataUrl()
+        const res = await fetch(dataUrl)
+        const blob = await res.blob()
+        return new File([blob], filename, { type: "image/png" })
+      } catch (err) {
+        console.error("[FlyerCanvas] capture error:", err)
+        return null
       }
     },
   }), [template.aspectRatio])

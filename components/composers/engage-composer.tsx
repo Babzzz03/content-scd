@@ -36,6 +36,7 @@ import { generateEngagements } from "@/lib/ai-mock"
 import { AutomationLog } from "@/components/automation/automation-log"
 import { useAccounts } from "@/lib/accounts-context"
 import { useAIProvider } from "@/lib/ai-provider-context"
+import { postsApi } from "@/lib/api/posts"
 import type {
   Platform,
   ContentTone,
@@ -209,83 +210,73 @@ export function EngageComposer({ platform, open, onClose }: EngageComposerProps)
     new Promise<void>((resolve) => setTimeout(resolve, Math.min(ms, 2000)))
 
   const handleStartAutomation = async () => {
-    if (!isTargetValid || !account.connected) return
+    if (!isTargetValid || !account.connected || !account.accountId) return
     stopRef.current = false
     setIsAutomating(true)
     setAutomationStatus("running")
     setLogEntries([])
 
     const targetDesc = describeTarget(target)
-    const providerLabel = activeProvider ? activeProvider.id : "mock"
+    const topic = target.type === "trending" ? "trending"
+      : target.type === "recent" ? "recent"
+      : target.type === "hashtag" ? target.value.replace(/^#?/, "#")   // ensure # prefix for hashtag search
+      : target.value.replace(/^[#@]/, "")
 
-    addEntry({ status: "info", message: `Searching ${targetDesc}…` })
-    await sleep(1200)
+    addEntry({ status: "info", message: `Generating ${autoEngagementType} text with AI…` })
 
-    const postSnippets = [
-      "Consistency is everything when building in public…",
-      "The real reason most startups fail is not the product…",
-      "Three things I wish I knew before launching my brand…",
-      "Hot take: your content strategy is broken if…",
-      "Here's what actually moves the needle on LinkedIn…",
-    ]
-    const usernames = [
-      "@contentcreator",
-      "@brandbuilder",
-      "@foundermind",
-      "@growthhacker",
-      "@bizstrategist",
-    ]
-
-    const found = Math.min(actionsPerRun + 2, 8)
-    addEntry({ status: "info", message: `Found ${found} posts in ${targetDesc}` })
-    await sleep(600)
-
-    let successCount = 0
-    for (let i = 0; i < actionsPerRun; i++) {
-      if (stopRef.current) {
-        addEntry({ status: "warning", message: "Automation stopped by user" })
-        break
-      }
-
-      const snippet = postSnippets[i % postSnippets.length]
-      const user = usernames[i % usernames.length]
-
-      addEntry({ status: "info", message: `Engaging with post by ${user}…`, detail: snippet })
-      await sleep(800)
-
-      addEntry({
-        status: "running",
-        message: `Generating ${autoEngagementType} with ${providerLabel}…`,
+    // Step 1 — generate the reply text with real AI
+    let replyText = ""
+    try {
+      const generated = await generateEngagements({
+        platform,
+        topic,
+        tone: autoTone,
+        engagementType: autoEngagementType,
+        count: 1,
       })
-      await sleep(1000)
-
-      const engagementSnippets = [
-        "This is exactly the mindset shift most people miss.",
-        "Brilliant take — the compounding effect here is underrated.",
-        "What's your take on how this scales for smaller teams?",
-        "Hot take: the brands that win long-term do exactly this.",
-        "Saved this. The part about consistency hit differently.",
-      ]
-      const text = engagementSnippets[i % engagementSnippets.length]
-
-      addEntry({
-        status: "success",
-        message: `Posted ${autoEngagementType}: '${text}'`,
-        detail: `On post by ${user}`,
-      })
-
-      successCount++
-      if (i < actionsPerRun - 1) await sleep(Math.min(delayMs, 1500))
+      replyText = generated[0]?.text ?? ""
+    } catch {
+      addEntry({ status: "warning", message: "AI generation failed — using fallback text" })
+      replyText = `Interesting perspective on ${topic}!`
     }
 
-    if (!stopRef.current) {
+    if (!replyText) {
+      addEntry({ status: "warning", message: "Could not generate reply text" })
+      setAutomationStatus("idle")
+      setIsAutomating(false)
+      return
+    }
+
+    addEntry({ status: "info", message: `Reply text: "${replyText}"` })
+    addEntry({ status: "info", message: `Searching ${targetDesc} and replying to top ${actionsPerRun} posts…` })
+
+    // Step 2 — fire real Playwright automation
+    try {
+      await postsApi.engage({
+        platform,
+        platformAccountId: account.accountId,
+        topic,
+        replyText,
+        repeatCount: actionsPerRun,
+        tone: autoTone,
+        delayBetween: delayMs,
+        targetType: target.type,
+      })
+
       addEntry({
         status: "success",
-        message: `Automation complete — ${successCount} engagement${successCount !== 1 ? "s" : ""} posted`,
+        message: `Automation started — replying to top ${actionsPerRun} posts about "${topic}"`,
+        detail: "Browser is running in background. Check your account for posted replies.",
       })
       setAutomationStatus("completed")
-      toast.success(`Automation complete — ${successCount} engagements posted`)
-    } else {
+      toast.success(`Engagement automation started!`, {
+        description: `Replying to ${actionsPerRun} posts about "${topic}"`,
+        duration: 6000,
+      })
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Automation failed"
+      addEntry({ status: "error" as never, message: msg })
+      toast.error("Automation failed", { description: msg })
       setAutomationStatus("idle")
     }
 

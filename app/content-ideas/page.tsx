@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import {
   Lightbulb,
   Sparkles,
@@ -19,7 +19,8 @@ import { Badge } from "@/components/ui/badge"
 import { IdeaCard } from "@/components/content-ideas/idea-card"
 import { ScheduleDatePicker } from "@/components/post-wizard/schedule-date-picker"
 import { generateContentIdeas, generateVideoPrompt } from "@/lib/ai-mock"
-import { DUMMY_CONTENT_IDEAS, DUMMY_BRAND_VOICE } from "@/lib/dummy-data"
+import { contentIdeasApi } from "@/lib/api/content-ideas"
+import { useBrandVoice as useSavedBrandVoice } from "@/hooks/use-brand-voice"
 import { usePostsContext } from "@/lib/posts-context"
 import { useAIProvider } from "@/lib/ai-provider-context"
 import type { Platform, ContentTone, ContentIdeaType, ContentIdea } from "@/lib/types"
@@ -63,8 +64,10 @@ export default function ContentIdeasPage() {
   const [tone, setTone] = useState<ContentTone>("casual")
   const [useBrandVoice, setUseBrandVoice] = useState(true)
   const [count, setCount] = useState(4)
-  const [ideas, setIdeas] = useState<ContentIdea[]>(DUMMY_CONTENT_IDEAS)
+  const [ideas, setIdeas] = useState<ContentIdea[]>([])
+  const [savedIdeas, setSavedIdeas] = useState<ContentIdea[]>([])
   const [isGenerating, setIsGenerating] = useState(false)
+  const [isLoadingSaved, setIsLoadingSaved] = useState(true)
   const [savedOnly, setSavedOnly] = useState(false)
 
   // Schedule state
@@ -73,6 +76,29 @@ export default function ContentIdeasPage() {
 
   const { addScheduledPost } = usePostsContext()
   const { activeProvider } = useAIProvider()
+  const { brandVoice, hasBrandVoice } = useSavedBrandVoice()
+
+  useEffect(() => {
+    if (!hasBrandVoice) setUseBrandVoice(false)
+  }, [hasBrandVoice])
+
+  useEffect(() => {
+    const loadSavedIdeas = async () => {
+      setIsLoadingSaved(true)
+      try {
+        const saved = await contentIdeasApi.listSaved()
+        setSavedIdeas(saved)
+        setIdeas(saved)
+      } catch {
+        setSavedIdeas([])
+        setIdeas([])
+      } finally {
+        setIsLoadingSaved(false)
+      }
+    }
+
+    loadSavedIdeas()
+  }, [])
 
   const togglePlatform = (p: Platform) =>
     setSelectedPlatforms((prev) =>
@@ -110,46 +136,72 @@ export default function ContentIdeasPage() {
     }
   }
 
-  const handleSaveIdea = (idea: ContentIdea) => {
-    setIdeas((prev) => prev.map((i) => (i.id === idea.id ? idea : i)))
+  const handleSaveIdea = async (idea: ContentIdea) => {
+    try {
+      if (!idea.saved) {
+        const toggled = await contentIdeasApi.toggleSaved(idea.id)
+        setSavedIdeas((prev) => prev.filter((i) => i.id !== idea.id))
+        setIdeas((prev) =>
+          prev.map((i) => (i.id === idea.id ? { ...i, id: toggled.id, saved: false } : i))
+        )
+        return
+      }
+
+      const saved = await contentIdeasApi.saveIdea(idea)
+      setSavedIdeas((prev) => [saved, ...prev.filter((i) => i.id !== saved.id)])
+      setIdeas((prev) =>
+        prev.map((i) =>
+          i.id === idea.id
+            ? {
+                ...i,
+                id: saved.id,
+                saved: true,
+              }
+            : i
+        )
+      )
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to save idea")
+    }
   }
 
   const handleScheduleIdea = (idea: ContentIdea) => {
     setScheduleTarget(idea)
   }
 
-  const handleScheduleConfirm = (date: Date) => {
+  const handleScheduleConfirm = async (date: Date) => {
     if (!scheduleTarget) return
     const platform = scheduleTarget.platforms[0] ?? "instagram"
-    addScheduledPost({
-      platform,
-      postType: "single",
-      content: scheduleTarget.title,
-      caption: scheduleTarget.suggestedCaption ?? scheduleTarget.description,
-      scheduledAt: date,
-      source: "content-idea",
-      ideaData: scheduleTarget,
-    })
-    toast.success("Video idea scheduled!", {
-      description: date.toLocaleString("en-US", {
-        weekday: "short",
-        month: "short",
-        day: "numeric",
-        hour: "numeric",
-        minute: "2-digit",
-      }),
-    })
-    setScheduleTarget(null)
+    try {
+      await addScheduledPost({
+        platform,
+        postType: "single",
+        content: scheduleTarget.title,
+        caption: scheduleTarget.suggestedCaption ?? scheduleTarget.description,
+        scheduledAt: date,
+        source: "content-idea",
+        ideaData: scheduleTarget,
+      })
+      toast.success("Video idea scheduled!", {
+        description: date.toLocaleString("en-US", {
+          weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+        }),
+      })
+      setScheduleTarget(null)
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to schedule")
+    }
   }
 
   const handleGenerateVideoPrompt = async (idea: ContentIdea): Promise<string> => {
     const prompt = await generateVideoPrompt(idea)
     setIdeas((prev) => prev.map((i) => (i.id === idea.id ? { ...i, videoPrompt: prompt } : i)))
+    setSavedIdeas((prev) => prev.map((i) => (i.id === idea.id ? { ...i, videoPrompt: prompt } : i)))
     return prompt
   }
 
-  const visibleIdeas = savedOnly ? ideas.filter((i) => i.saved) : ideas
-  const savedCount = ideas.filter((i) => i.saved).length
+  const visibleIdeas = savedOnly ? savedIdeas : ideas
+  const savedCount = savedIdeas.length
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
@@ -206,13 +258,13 @@ export default function ContentIdeasPage() {
             <div>
               <p className="text-sm font-medium">Brand Voice</p>
               <p className="text-xs text-muted-foreground mt-0.5">
-                {DUMMY_BRAND_VOICE ? `Using: ${DUMMY_BRAND_VOICE.brandName}` : "Set up in Brand Voice page"}
+                {hasBrandVoice ? `Using: ${brandVoice.brandName}` : "Set up in Brand Voice page"}
               </p>
             </div>
             <Switch
               checked={useBrandVoice}
               onCheckedChange={setUseBrandVoice}
-              disabled={!DUMMY_BRAND_VOICE}
+              disabled={!hasBrandVoice}
             />
           </div>
 
@@ -374,7 +426,12 @@ export default function ContentIdeasPage() {
               <Loader2 className="size-8 text-primary animate-spin" />
               <p className="text-sm text-muted-foreground">Generating video ideas…</p>
             </div>
-          ) : ideas.length === 0 ? (
+          ) : !savedOnly && ideas.length === 0 && isLoadingSaved ? (
+            <div className="flex flex-col items-center justify-center h-64 gap-4">
+              <Loader2 className="size-8 text-primary animate-spin" />
+              <p className="text-sm text-muted-foreground">Loading saved ideas…</p>
+            </div>
+          ) : !savedOnly && ideas.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-64 gap-4 text-center">
               <div className="flex size-16 items-center justify-center rounded-2xl bg-primary/10">
                 <Lightbulb className="size-8 text-primary" />
@@ -429,16 +486,27 @@ export default function ContentIdeasPage() {
               {visibleIdeas.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-40 gap-2 text-center">
                   <Bookmark className="size-6 text-muted-foreground/50" />
-                  <p className="text-sm text-muted-foreground">No saved ideas yet</p>
-                  <p className="text-xs text-muted-foreground">
-                    Click <strong>Save</strong> on any idea to add it here
-                  </p>
-                  <button
-                    onClick={() => setSavedOnly(false)}
-                    className="text-xs text-primary hover:underline"
-                  >
-                    Back to all ideas
-                  </button>
+                  {savedOnly ? (
+                    <>
+                      <p className="text-sm text-muted-foreground">No saved ideas yet</p>
+                      <p className="text-xs text-muted-foreground">
+                        Click <strong>Save</strong> on any idea to add it here
+                      </p>
+                      <button
+                        onClick={() => setSavedOnly(false)}
+                        className="text-xs text-primary hover:underline"
+                      >
+                        Back to all ideas
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-sm text-muted-foreground">No ideas yet</p>
+                      <p className="text-xs text-muted-foreground">
+                        Configure your brief and click Generate Video Ideas to get started
+                      </p>
+                    </>
+                  )}
                 </div>
               ) : (
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">

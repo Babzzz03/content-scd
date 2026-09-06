@@ -13,9 +13,17 @@ import {
 import { cn } from "@/lib/utils"
 import { FLYER_TEMPLATES } from "@/lib/dummy-data"
 import { FlyerCanvas } from "@/components/post-wizard/flyer-canvas"
-import type { FlyerTemplate } from "@/lib/types"
+import type { FlyerTemplate, Platform, PostType } from "@/lib/types"
+
+const PLATFORM_ASPECT: Partial<Record<Platform, Partial<Record<string, FlyerTemplate["aspectRatio"]>>>> = {
+  x:         { single: "4:5", thread: "4:5", image: "4:5" },
+  instagram: { single: "4:5", carousel: "4:5", story: "9:16", reel: "9:16" },
+  linkedin:  { single: "1:1", text: "1:1", image: "1:1", carousel: "1:1", article: "16:9" },
+}
 
 interface StepFlyerSelectProps {
+  platform: Platform
+  postType: PostType | null
   selected: FlyerTemplate | null
   customFlyerPreviewUrl: string | null
   onSelect: (template: FlyerTemplate) => void
@@ -25,6 +33,8 @@ interface StepFlyerSelectProps {
 }
 
 export function StepFlyerSelect({
+  platform,
+  postType,
   selected,
   customFlyerPreviewUrl,
   onSelect,
@@ -33,6 +43,8 @@ export function StepFlyerSelect({
   onSkip,
 }: StepFlyerSelectProps) {
   const [previewTemplate, setPreviewTemplate] = useState<FlyerTemplate | null>(null)
+  const aspectOverride = (postType ? PLATFORM_ASPECT[platform]?.[postType] : undefined) ?? PLATFORM_ASPECT[platform]?.["single"]
+  const applyAspect = (t: FlyerTemplate) => aspectOverride ? { ...t, aspectRatio: aspectOverride } : t
 
   const handleFileChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -101,7 +113,7 @@ export function StepFlyerSelect({
                 <X className="size-3" />
               </Button>
             </div>
-            <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/50 to-transparent px-3 py-2">
+            <div className="absolute bottom-0 left-0 right-0 bg-linear-to-t from-black/50 to-transparent px-3 py-2">
               <p className="text-[11px] text-white font-medium flex items-center gap-1.5">
                 <ImageIcon className="size-3" />
                 Custom flyer — will be used as-is in the post
@@ -151,6 +163,7 @@ export function StepFlyerSelect({
       {/* ── Premade templates — Canva-style full-preview grid ─────────────────── */}
       <div className="grid grid-cols-2 gap-3">
         {FLYER_TEMPLATES.map((template) => {
+          const effective = applyAspect(template)
           const isSelected = !customFlyerPreviewUrl && selected?.id === template.id
 
           return (
@@ -158,8 +171,8 @@ export function StepFlyerSelect({
               key={template.id}
               role="button"
               tabIndex={0}
-              onClick={() => onSelect(template)}
-              onKeyDown={(e) => e.key === "Enter" && onSelect(template)}
+              onClick={() => onSelect(effective)}
+              onKeyDown={(e) => e.key === "Enter" && onSelect(effective)}
               className={cn(
                 "group relative rounded-xl border-2 overflow-hidden cursor-pointer transition-all outline-none",
                 "focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1",
@@ -170,7 +183,7 @@ export function StepFlyerSelect({
               )}
             >
               {/* Full flyer preview — no height clip, shows true aspect ratio */}
-              <FlyerCanvas template={template} previewMode />
+              <FlyerCanvas template={effective} previewMode />
 
               {/* Hover overlay */}
               <div className="absolute inset-0 bg-black/0 group-hover:bg-black/25 transition-all" />
@@ -179,7 +192,7 @@ export function StepFlyerSelect({
               <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
                 <button
                   type="button"
-                  onClick={(e) => { e.stopPropagation(); setPreviewTemplate(template) }}
+                  onClick={(e) => { e.stopPropagation(); setPreviewTemplate(effective) }}
                   className="flex items-center gap-1 rounded-md bg-black/70 backdrop-blur-sm px-2 py-1 text-[10px] font-medium text-white hover:bg-black/90 transition-colors"
                 >
                   <Maximize2 className="size-3" />
@@ -198,7 +211,7 @@ export function StepFlyerSelect({
               <div className="px-2.5 py-2 bg-card flex items-center justify-between gap-1">
                 <p className="text-xs font-semibold truncate leading-none">{template.name}</p>
                 <Badge variant="secondary" className="text-[9px] py-0 h-4 shrink-0 font-medium">
-                  {template.aspectRatio}
+                  {effective.aspectRatio}
                 </Badge>
               </div>
             </div>

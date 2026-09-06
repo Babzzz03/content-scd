@@ -31,7 +31,7 @@ export type ContentIdeaType =
   | "storytelling"
 
 // ─── Post Status ──────────────────────────────────────────────────────────────
-export type PostStatus = "draft" | "scheduled" | "published" | "failed"
+export type PostStatus = "draft" | "scheduled" | "publishing" | "published" | "failed"
 
 // ─── Flyer Template ───────────────────────────────────────────────────────────
 export type FlyerLayout =
@@ -77,6 +77,8 @@ export interface PostWizardState {
   selectedFlyer: FlyerTemplate | null
   imageFile: File | null
   imagePreviewUrl: string | null
+  imageFiles: File[]
+  imagePreviewUrls: string[]
   customFlyerFile: File | null       // user-uploaded flyer (bypasses template system)
   customFlyerPreviewUrl: string | null
   logoFile: File | null              // brand/channel logo shown on flyers
@@ -129,6 +131,8 @@ export interface GeneratedPostContent {
   hashtags: string[]
   threadPosts?: string[]
   carouselSlides?: { text: string; subtext: string }[]
+  /** All AI-generated variations (index 0 = the currently active one) */
+  variations?: Omit<GeneratedPostContent, "variations">[]
 }
 
 // ─── Scheduled Post ───────────────────────────────────────────────────────────
@@ -153,6 +157,11 @@ export interface ContentIdea {
   type: ContentIdeaType
   title: string
   description: string
+  format?: string
+  hook?: string
+  whyItWorks?: string
+  difficulty?: "easy" | "medium" | "hard"
+  trendingTags?: string[]
   script?: string // for verbal content
   visualDirection?: string
   suggestedCaption?: string
@@ -189,6 +198,12 @@ export interface BrandVoice {
   keyMessages: string[]
   competitors?: string[]
   styleNotes?: string
+  personalityAdjectives?: string[]
+  languageToUse?: string[]
+  languageToAvoid?: string[]
+  emojiGuideline?: string
+  hashtagStrategy?: string
+  platformNotes?: Partial<Record<Platform, string>>
   primaryColor?: string
   secondaryColor?: string
   createdAt: Date
@@ -203,6 +218,7 @@ export interface ReplyComposerInput {
   tone: ContentTone
   useBrandVoice: boolean
   replyCount: number
+  topComments?: string[]
 }
 
 export interface GeneratedReply {
@@ -245,7 +261,8 @@ export interface ConnectedAccount {
   displayName?: string
   profileImageUrl?: string
   connectedAt?: Date
-  sessionCookie?: string // raw session cookie value used for automation
+  sessionCookie?: string
+  accountId?: string  // backend _id, used for disconnect/update calls
 }
 
 // ─── Marketing Strategy ───────────────────────────────────────────────────────
@@ -356,6 +373,10 @@ export interface PostIdea {
   caption: string
   hashtags: string[]
   tone: ContentTone
+  format?: string
+  hook?: string
+  whyItWorks?: string
+  difficulty?: "easy" | "medium" | "hard"
   imagePrompt?: string
   saved?: boolean
 }
@@ -412,4 +433,168 @@ export interface PlatformStats {
   draftCount: number
   publishedThisWeek: number
   engagementRate?: string
+}
+
+// ─── Lead Generation ──────────────────────────────────────────────────────────
+
+export type LeadStatus =
+  | "new"
+  | "enriched"
+  | "qualified"
+  | "drafted"
+  | "approved"
+  | "queued"
+  | "messaged"
+  | "replied"
+  | "skipped"
+  | "failed"
+  | "opted_out"
+
+export type LeadFit = "strong" | "moderate" | "weak" | "unqualified" | null
+
+export type CampaignStatus =
+  | "draft"
+  | "discovering"
+  | "ready"
+  | "sending"
+  | "paused"
+  | "completed"
+  | "error"
+
+export interface LeadContact {
+  email?: string
+  phone?: string
+  whatsapp?: string
+  address?: string
+}
+
+export interface Lead {
+  _id: string
+  campaign?: string
+  username: string
+  fullName: string
+  profileUrl: string
+  profilePicUrl: string
+  bio: string
+  category: string
+  externalLink: string
+  followers: number
+  following: number
+  postsCount: number
+  isBusinessAccount: boolean
+  isVerified: boolean
+  isPrivate: boolean
+  hasWebsite: boolean
+  contact: LeadContact
+  lastPostAt: string | null
+  niche: string
+  location: string
+  discoveredVia: { type: string; query: string }
+  score: number
+  scoreReasons: string[]
+  aiFit: LeadFit
+  aiAngle: string
+  aiReasoning: string
+  status: LeadStatus
+  draftMessage: string
+  approvedMessage: string
+  messagedAt: string | null
+  repliedAt: string | null
+  replyPreview: string
+  threadUrl: string
+  sendAttempts: number
+  sendError: string | null
+  skipReason: string
+  createdAt: string
+}
+
+export interface LeadFilters {
+  requireNoWebsite: boolean
+  requireBusinessAccount: boolean
+  requireContactInfo: boolean
+  excludeVerified: boolean
+  excludePrivate: boolean
+  minFollowers: number
+  maxFollowers: number
+  minPosts: number
+  activeWithinDays: number
+  bioKeywords: string[]
+  excludeKeywords: string[]
+}
+
+export interface LeadOffer {
+  what: string
+  painPoint: string
+  proof: string
+  callToAction: string
+}
+
+export interface CampaignSendState {
+  allowed: boolean
+  reason: string
+  capToday: number
+  sentToday: number
+}
+
+export interface LeadCampaign {
+  _id: string
+  name: string
+  platformAccountId: string
+  status: CampaignStatus
+  search: {
+    niches: string[]
+    locations: string[]
+    extraHashtags: string[]
+    generatedQueries: string[]
+  }
+  filters: LeadFilters
+  targetLeadCount: number
+  offer: LeadOffer
+  icp: string
+  messageSettings: {
+    autoSend: boolean
+    dailyCap: number
+    sendWindow: { start: number; end: number }
+    timezone: string
+    useWarmup: boolean
+  }
+  stats: {
+    discovered: number
+    enriched: number
+    qualified: number
+    drafted: number
+    approved: number
+    sent: number
+    replied: number
+    skipped: number
+    failed: number
+  }
+  sentToday: number
+  firstSentAt: string | null
+  lastDiscoveryAt: string | null
+  lastError: string | null
+  sendState?: CampaignSendState
+  createdAt: string
+}
+
+export interface LeadStats {
+  total: number
+  counts: Partial<Record<LeadStatus, number>>
+  awaitingReview: number
+  replyRate: number
+}
+
+/** Copy shown against each lead status in the UI. */
+export const LEAD_STATUS_LABEL: Record<LeadStatus, string> = {
+  new:       "New",
+  enriched:  "Enriched",
+  qualified: "Qualified",
+  drafted:   "Awaiting review",
+  approved:  "Approved",
+  queued:    "Sending",
+  messaged:  "Messaged",
+  replied:   "Replied",
+  skipped:   "Skipped",
+  failed:    "Failed",
+  opted_out: "Opted out",
 }

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import {
   Newspaper,
   Sparkles,
@@ -23,7 +23,8 @@ import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 import { PostWizard } from "@/components/post-wizard/post-wizard"
 import { generatePostIdeas } from "@/lib/ai-mock"
-import { DUMMY_BRAND_VOICE } from "@/lib/dummy-data"
+import { ApiError } from "@/lib/api/client"
+import { useBrandVoice as useSavedBrandVoice } from "@/hooks/use-brand-voice"
 import { useAIProvider } from "@/lib/ai-provider-context"
 import type { Platform, ContentTone, PostIdea, PostType } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -67,6 +68,12 @@ const POST_TYPE_LABELS: Record<PostType, string> = {
   story: "Story",
 }
 
+const DIFFICULTY_STYLES = {
+  easy: "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-400",
+  medium: "bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400",
+  hard: "bg-rose-50 text-rose-700 dark:bg-rose-950/30 dark:text-rose-400",
+} as const
+
 // ── PostIdeaCard ──────────────────────────────────────────────────────────────
 interface PostIdeaCardProps {
   idea: PostIdea
@@ -100,9 +107,24 @@ function PostIdeaCard({ idea, onSchedule, onPostNow, onToggleSave }: PostIdeaCar
             <Badge variant="outline" className="text-[10px] h-4 px-1.5">
               {POST_TYPE_LABELS[idea.postType] ?? idea.postType}
             </Badge>
+            {idea.format && (
+              <Badge variant="outline" className="text-[10px] h-4 px-1.5">
+                {idea.format}
+              </Badge>
+            )}
             <Badge variant="outline" className="text-[10px] h-4 px-1.5 capitalize">
               {idea.tone}
             </Badge>
+            {idea.difficulty && (
+              <span
+                className={cn(
+                  "inline-flex h-4 items-center rounded-full px-1.5 text-[10px] font-medium capitalize",
+                  DIFFICULTY_STYLES[idea.difficulty]
+                )}
+              >
+                {idea.difficulty}
+              </span>
+            )}
           </div>
           <h3 className="text-sm font-semibold leading-snug">{idea.title}</h3>
         </div>
@@ -124,6 +146,28 @@ function PostIdeaCard({ idea, onSchedule, onPostNow, onToggleSave }: PostIdeaCar
       <p className="text-xs text-muted-foreground leading-relaxed line-clamp-2">
         {idea.caption}
       </p>
+
+      {idea.hook && (
+        <div className="rounded-lg bg-muted/50 px-3 py-2">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Hook
+          </p>
+          <p className="mt-1 text-[11px] leading-relaxed text-foreground">
+            {idea.hook}
+          </p>
+        </div>
+      )}
+
+      {idea.whyItWorks && (
+        <div className="rounded-lg border border-dashed px-3 py-2">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Why It Works
+          </p>
+          <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+            {idea.whyItWorks}
+          </p>
+        </div>
+      )}
 
       {/* Hashtags */}
       {idea.hashtags.length > 0 && (
@@ -198,6 +242,13 @@ export default function PostIdeasPage() {
   const [count, setCount] = useState(5)
   const [useBrandVoice, setUseBrandVoice] = useState(true)
   const [ideas, setIdeas] = useState<PostIdea[]>([])
+  const [savedIds, setSavedIds] = useState<Set<string>>(() => {
+    if (typeof window === "undefined") return new Set()
+    try {
+      const stored = localStorage.getItem("postflow:saved-idea-ids")
+      return new Set(stored ? JSON.parse(stored) : [])
+    } catch { return new Set() }
+  })
   const [isGenerating, setIsGenerating] = useState(false)
   const [mobileTab, setMobileTab] = useState<"settings" | "results">("settings")
 
@@ -217,6 +268,11 @@ export default function PostIdeasPage() {
   } | null>(null)
 
   const { activeProvider } = useAIProvider()
+  const { brandVoice, hasBrandVoice } = useSavedBrandVoice()
+
+  useEffect(() => {
+    if (!hasBrandVoice) setUseBrandVoice(false)
+  }, [hasBrandVoice])
 
   const togglePlatform = (p: Platform) => {
     setSelectedPlatforms((prev) =>
@@ -242,10 +298,16 @@ export default function PostIdeasPage() {
         },
         activeProvider?.id ?? null
       )
-      setIdeas(results)
+      setIdeas(results.map((r) => ({ ...r, saved: savedIds.has(r.id) })))
       toast.success(`${results.length} post ideas generated!`)
-    } catch {
-      toast.error("Generation failed. Please try again.")
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Generation failed. Please try again."
+      toast.error(message, {
+        description: err instanceof ApiError && (err.message.includes("generation") || err.message.includes("Upgrade"))
+          ? "Visit the Subscription page to upgrade your plan."
+          : undefined,
+        duration: 6000,
+      })
     } finally {
       setIsGenerating(false)
     }
@@ -253,6 +315,13 @@ export default function PostIdeasPage() {
 
   const handleToggleSave = (idea: PostIdea) => {
     setIdeas((prev) => prev.map((i) => (i.id === idea.id ? idea : i)))
+    setSavedIds((prev) => {
+      const next = new Set(prev)
+      if (idea.saved) next.add(idea.id)
+      else next.delete(idea.id)
+      try { localStorage.setItem("postflow:saved-idea-ids", JSON.stringify([...next])) } catch {}
+      return next
+    })
   }
 
   const openWizard = (idea: PostIdea, postNow = false) => {
@@ -328,15 +397,13 @@ export default function PostIdeasPage() {
             <div>
               <p className="text-sm font-medium">Brand Voice</p>
               <p className="text-xs text-muted-foreground mt-0.5">
-                {DUMMY_BRAND_VOICE
-                  ? `Using: ${DUMMY_BRAND_VOICE.brandName}`
-                  : "Set up in Brand Voice page"}
+                {hasBrandVoice ? `Using: ${brandVoice.brandName}` : "Set up in Brand Voice page"}
               </p>
             </div>
             <Switch
               checked={useBrandVoice}
               onCheckedChange={setUseBrandVoice}
-              disabled={!DUMMY_BRAND_VOICE}
+              disabled={!hasBrandVoice}
             />
           </div>
 

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
 import {
   MessageCircleReply,
   Sparkles,
@@ -11,6 +11,8 @@ import {
   Bot,
   AlertTriangle,
   Play,
+  Plus,
+  X,
 } from "lucide-react"
 import {
   Dialog,
@@ -31,9 +33,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { TargetSelector, describeTarget, type TargetConfig } from "./target-selector"
 import { generateReplies } from "@/lib/ai-mock"
 import { AutomationLog } from "@/components/automation/automation-log"
-import { DUMMY_BRAND_VOICE } from "@/lib/dummy-data"
+import { useBrandVoice as useSavedBrandVoice } from "@/hooks/use-brand-voice"
 import { useAccounts } from "@/lib/accounts-context"
 import { useAIProvider } from "@/lib/ai-provider-context"
+import { postsApi } from "@/lib/api/posts"
 import type {
   Platform,
   ContentTone,
@@ -76,6 +79,8 @@ export function ReplyComposer({ platform, open, onClose }: ReplyComposerProps) {
   // Generate tab
   const [originalPost, setOriginalPost] = useState("")
   const [authorHandle, setAuthorHandle] = useState("")
+  const [topComments, setTopComments] = useState<string[]>([])
+  const [commentInput, setCommentInput] = useState("")
   const [tone, setTone] = useState<ContentTone>("professional")
   const [useBrandVoice, setUseBrandVoice] = useState(true)
   const [replies, setReplies] = useState<GeneratedReply[]>([])
@@ -97,7 +102,15 @@ export function ReplyComposer({ platform, open, onClose }: ReplyComposerProps) {
 
   const { getAccount } = useAccounts()
   const { activeProvider } = useAIProvider()
+  const { hasBrandVoice } = useSavedBrandVoice()
   const account = getAccount(platform)
+
+  useEffect(() => {
+    if (!hasBrandVoice) {
+      setUseBrandVoice(false)
+      setAutoBrandVoice(false)
+    }
+  }, [hasBrandVoice])
 
   const isTargetValid =
     target.type === "trending" || target.type === "recent" || target.value.trim().length > 0
@@ -114,6 +127,7 @@ export function ReplyComposer({ platform, open, onClose }: ReplyComposerProps) {
         tone,
         useBrandVoice,
         replyCount: 3,
+        topComments: topComments.filter(Boolean),
       })
       setReplies(results)
       toast.success("Replies generated!")
@@ -166,78 +180,77 @@ export function ReplyComposer({ platform, open, onClose }: ReplyComposerProps) {
     setLogEntries((prev) => [...prev, newEntry])
   }
 
-  const sleep = (ms: number) =>
-    new Promise<void>((resolve) => setTimeout(resolve, Math.min(ms, 2000)))
-
   const handleStartAutomation = async () => {
-    if (!isTargetValid || !account.connected) return
+    if (!isTargetValid || !account.connected || !account.accountId) return
     stopRef.current = false
     setIsAutomating(true)
     setAutomationStatus("running")
     setLogEntries([])
 
     const targetDesc = describeTarget(target)
-    const providerLabel = activeProvider ? activeProvider.id : "mock"
 
-    addEntry({ status: "info", message: `Fetching ${targetDesc}…` })
-    await sleep(1200)
+    // Build the topic string the same way EngageComposer does
+    const topic =
+      target.type === "trending" ? "trending"
+      : target.type === "recent" ? "recent"
+      : target.type === "hashtag" ? target.value.replace(/^#?/, "#")
+      : target.value.replace(/^[#@]/, "")
 
-    const postSnippets = [
-      "Great insights on productivity this week…",
-      "Why consistency beats motivation every time…",
-      "The one habit that changed my workflow…",
-      "Unpopular opinion: hustle culture is overrated…",
-      "How I went from 0 to 10k followers in 90 days…",
-    ]
-    const usernames = ["@creator123", "@brandbuilder", "@growthhacker", "@foundermode", "@contentpro"]
+    addEntry({ status: "info", message: `Generating reply text with AI…` })
 
-    const found = Math.min(actionsPerRun + 2, 8)
-    addEntry({ status: "info", message: `Found ${found} posts in ${targetDesc}` })
-    await sleep(600)
-
-    let successCount = 0
-    for (let i = 0; i < actionsPerRun; i++) {
-      if (stopRef.current) {
-        addEntry({ status: "warning", message: "Automation stopped by user" })
-        break
-      }
-
-      const snippet = postSnippets[i % postSnippets.length]
-      const user = usernames[i % usernames.length]
-
-      addEntry({ status: "info", message: `Found post: '${snippet}' by ${user}` })
-      await sleep(800)
-
-      addEntry({ status: "running", message: `Generating reply with ${providerLabel}…` })
-      await sleep(1000)
-
-      const replySnippets = [
-        "Completely agree — the key is consistency over everything.",
-        "This is such a valid point. Authenticity wins every time.",
-        "Couldn't have said it better. The compounding effect is real.",
-        "Love this perspective. What's worked for us is leaning into storytelling.",
-        "100% this. The brands that show up daily are the ones that grow.",
-      ]
-      const replyText = replySnippets[i % replySnippets.length]
-
-      addEntry({
-        status: "success",
-        message: `Posted reply: '${replyText}'`,
-        detail: `Target: ${user} · ${snippet.slice(0, 40)}…`,
+    // Step 1: generate a fallback reply text via AI
+    let replyText = ""
+    try {
+      const generated = await generateReplies({
+        platform,
+        originalPost: `Posts about ${topic}`,
+        tone: autoTone,
+        useBrandVoice: autoBrandVoice,
+        replyCount: 1,
       })
-
-      successCount++
-      if (i < actionsPerRun - 1) await sleep(Math.min(delayMs, 1500))
+      replyText = generated[0]?.text ?? ""
+    } catch {
+      addEntry({ status: "warning", message: "AI preview failed, using generic fallback" })
+      replyText = `Interesting perspective on ${topic}.`
     }
 
-    if (!stopRef.current) {
+    if (!replyText) {
+      addEntry({ status: "warning", message: "Could not generate reply text" })
+      setAutomationStatus("idle")
+      setIsAutomating(false)
+      return
+    }
+
+    addEntry({ status: "info", message: `Fallback reply: "${replyText}"` })
+    addEntry({ status: "info", message: `Searching ${targetDesc} and replying to top ${actionsPerRun} posts…` })
+
+    // Step 2: fire real Playwright automation
+    try {
+      await postsApi.engage({
+        platform,
+        platformAccountId: account.accountId,
+        topic,
+        replyText,
+        repeatCount: actionsPerRun,
+        tone: autoTone,
+        delayBetween: delayMs,
+        targetType: target.type,
+      })
+
       addEntry({
         status: "success",
-        message: `Automation complete — ${successCount} ${successCount === 1 ? "reply" : "replies"} posted`,
+        message: `Automation started, replying to top ${actionsPerRun} posts about "${topic}"`,
+        detail: "Browser is running in background. AI will read each post and craft a specific reply.",
       })
       setAutomationStatus("completed")
-      toast.success(`Automation complete — ${successCount} replies posted`)
-    } else {
+      toast.success("Reply automation started!", {
+        description: `Replying to ${actionsPerRun} posts about "${topic}"`,
+        duration: 6000,
+      })
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Automation failed"
+      addEntry({ status: "error" as never, message: msg })
+      toast.error("Automation failed", { description: msg })
       setAutomationStatus("idle")
     }
 
@@ -317,6 +330,71 @@ export function ReplyComposer({ platform, open, onClose }: ReplyComposerProps) {
               />
             </div>
 
+            {/* Top comments — helps AI avoid repeating what's already been said */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label>
+                  Top comments{" "}
+                  <span className="text-muted-foreground text-xs">(optional but recommended)</span>
+                </Label>
+                {topComments.length > 0 && (
+                  <button
+                    onClick={() => setTopComments([])}
+                    className="text-[11px] text-muted-foreground hover:text-destructive transition-colors"
+                  >
+                    Clear all
+                  </button>
+                )}
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                Paste the most-liked comments on this post so the AI generates a fresh angle instead of repeating what's already been said.
+              </p>
+              <div className="flex gap-2">
+                <Input
+                  placeholder="Paste a top comment…"
+                  value={commentInput}
+                  onChange={(e) => setCommentInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && commentInput.trim()) {
+                      e.preventDefault()
+                      setTopComments((prev) => [...prev, commentInput.trim()])
+                      setCommentInput("")
+                    }
+                  }}
+                  className="text-sm"
+                />
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="outline"
+                  className="shrink-0"
+                  disabled={!commentInput.trim()}
+                  onClick={() => {
+                    if (!commentInput.trim()) return
+                    setTopComments((prev) => [...prev, commentInput.trim()])
+                    setCommentInput("")
+                  }}
+                >
+                  <Plus className="size-3.5" />
+                </Button>
+              </div>
+              {topComments.length > 0 && (
+                <div className="space-y-1.5">
+                  {topComments.map((c, i) => (
+                    <div key={i} className="flex items-start gap-2 rounded-md border bg-muted/40 px-3 py-2">
+                      <p className="flex-1 text-xs text-foreground line-clamp-2">{c}</p>
+                      <button
+                        onClick={() => setTopComments((prev) => prev.filter((_, idx) => idx !== i))}
+                        className="shrink-0 text-muted-foreground hover:text-destructive transition-colors mt-0.5"
+                      >
+                        <X className="size-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
             <div className="space-y-2">
               <Label>Reply tone</Label>
               <div className="flex flex-wrap gap-2">
@@ -339,7 +417,7 @@ export function ReplyComposer({ platform, open, onClose }: ReplyComposerProps) {
 
             <div className="flex items-center justify-between rounded-lg border bg-muted/50 px-4 py-3">
               <p className="text-sm">Use Brand Voice</p>
-              <Switch checked={useBrandVoice} onCheckedChange={setUseBrandVoice} />
+              <Switch checked={useBrandVoice} onCheckedChange={setUseBrandVoice} disabled={!hasBrandVoice} />
             </div>
 
             <Button
@@ -491,7 +569,7 @@ export function ReplyComposer({ platform, open, onClose }: ReplyComposerProps) {
                 {/* Brand voice */}
                 <div className="flex items-center justify-between rounded-lg border bg-muted/50 px-4 py-3">
                   <p className="text-sm">Use Brand Voice</p>
-                  <Switch checked={autoBrandVoice} onCheckedChange={setAutoBrandVoice} />
+                  <Switch checked={autoBrandVoice} onCheckedChange={setAutoBrandVoice} disabled={!hasBrandVoice} />
                 </div>
 
                 {/* Actions per run */}
@@ -564,7 +642,7 @@ export function ReplyComposer({ platform, open, onClose }: ReplyComposerProps) {
                     {previewReplies.map((reply) => (
                       <div key={reply.id} className="rounded-lg border bg-muted/30 px-3 py-2.5">
                         <p className="text-xs leading-relaxed text-muted-foreground">
-                          "{reply.text}"
+                          &quot;{reply.text}&quot;
                         </p>
                       </div>
                     ))}

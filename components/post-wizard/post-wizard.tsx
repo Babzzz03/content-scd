@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect, useRef } from "react"
 import { ArrowLeft, ArrowRight, Sparkles, Loader2, Info, Zap } from "lucide-react"
 import {
   Dialog,
@@ -17,9 +17,11 @@ import { StepAIInput } from "./step-ai-input"
 import { StepFlyerSelect } from "./step-flyer-select"
 import { StepImageUpload } from "./step-image-upload"
 import { StepPreview } from "./step-preview"
+import type { FlyerCanvasHandle } from "./flyer-canvas"
 import { ScheduleDatePicker } from "./schedule-date-picker"
 import { generatePostContent } from "@/lib/ai-mock"
-import { DUMMY_BRAND_VOICE } from "@/lib/dummy-data"
+import { ApiError } from "@/lib/api/client"
+import { useBrandVoice } from "@/hooks/use-brand-voice"
 import { usePostsContext } from "@/lib/posts-context"
 import { useAIProvider } from "@/lib/ai-provider-context"
 import { useAccounts } from "@/lib/accounts-context"
@@ -49,12 +51,14 @@ const INITIAL_STATE = (platform: Platform): PostWizardState => ({
   aiInput: {
     topic: "",
     tone: "professional",
-    useBrandVoice: false,
+    useBrandVoice: true,
     additionalContext: "",
   },
   selectedFlyer: null,
   imageFile: null,
   imagePreviewUrl: null,
+  imageFiles: [],
+  imagePreviewUrls: [],
   customFlyerFile: null,
   customFlyerPreviewUrl: null,
   logoFile: null,
@@ -102,6 +106,7 @@ interface PostWizardProps {
 }
 
 export function PostWizard({ platform, open, onClose, prefill }: PostWizardProps) {
+  const { brandVoice, hasBrandVoice } = useBrandVoice()
   // Build initial state considering prefill
   const buildInitialState = (): PostWizardState => {
     if (!prefill) return INITIAL_STATE(platform)
@@ -113,12 +118,14 @@ export function PostWizard({ platform, open, onClose, prefill }: PostWizardProps
       aiInput: {
         topic: prefill.topic,
         tone: prefill.tone,
-        useBrandVoice: !!DUMMY_BRAND_VOICE,
+        useBrandVoice: true,
         additionalContext: prefill.caption, // idea caption becomes additional context
       },
       selectedFlyer: null,
       imageFile: null,
       imagePreviewUrl: null,
+      imageFiles: [],
+      imagePreviewUrls: [],
       customFlyerFile: null,
       customFlyerPreviewUrl: null,
       logoFile: null,
@@ -134,12 +141,37 @@ export function PostWizard({ platform, open, onClose, prefill }: PostWizardProps
     prefill ? ["post-type"] : []
   )
   const [isGenerating, setIsGenerating] = useState(false)
+  const [isPublishing, setIsPublishing] = useState(false)
   const [showDatePicker, setShowDatePicker] = useState(false)
-  const { addScheduledPost } = usePostsContext()
+  const [aiError, setAiError] = useState<string | null>(null)
+  const { addScheduledPost, publishNow } = usePostsContext()
   const { activeProvider } = useAIProvider()
   const { getAccount } = useAccounts()
+  const flyerCanvasRefs = useRef<(FlyerCanvasHandle | null)[]>([])
 
   const currentStepIdx = STEP_ORDER.indexOf(state.step)
+
+  // Auto-generate when opened with postNow=true (skip manual "Generate" click)
+  useEffect(() => {
+    if (!open || !prefill?.postNow || isGenerating) return
+    const currentState = state
+    if (currentState.step !== "ai-input" || currentState.generatedContent) return
+    setIsGenerating(true)
+    generatePostContent(currentState, activeProvider?.id ?? null)
+      .then((generated) => {
+        updateState({ generatedContent: generated, step: "preview" })
+        markStepComplete("ai-input")
+        markStepComplete("flyer-select")
+        markStepComplete("image-upload")
+      })
+      .catch((err) => {
+        console.error("[AUTO-GENERATE]", err)
+        const message = err instanceof ApiError ? err.message : "Something went wrong. Please try again."
+        setAiError(message)
+      })
+      .finally(() => setIsGenerating(false))
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
 
   const updateState = (updates: Partial<PostWizardState>) => {
     setState((prev) => ({ ...prev, ...updates }))
@@ -166,16 +198,26 @@ export function PostWizard({ platform, open, onClose, prefill }: PostWizardProps
         toast.success("AI content generated!", { description: `Review and customise below${providerLabel}` })
       } catch (err) {
         console.error("[AI ERROR]", err)
-        toast.error("AI generation failed", { description: "Please try again" })
+        const message = err instanceof ApiError ? err.message : "Something went wrong. Please try again."
+        setAiError(message)
       } finally {
         setIsGenerating(false)
       }
       return
     }
 
-    // Skip image upload if custom flyer uploaded OR selected flyer has no image slot
+    // Decide whether to show the image-upload step:
+    // - Custom flyer uploaded → flyer IS the media, skip upload
+    // - Flyer with image slot selected → need upload for the background photo
+    // - No flyer + post type needs media (carousel, image, single, story, reel) → show upload
+    // - No flyer + text-only post type → skip upload
     if (state.step === "flyer-select") {
-      if (state.customFlyerFile || !state.selectedFlyer?.hasImageSlot) {
+      if (state.customFlyerFile) {
+        updateState({ step: "preview" })
+        return
+      }
+      const needsMedia = ["carousel", "image", "single", "story", "reel"].includes(state.postType ?? "")
+      if (!state.selectedFlyer?.hasImageSlot && !needsMedia) {
         updateState({ step: "preview" })
         return
       }
@@ -188,9 +230,12 @@ export function PostWizard({ platform, open, onClose, prefill }: PostWizardProps
   }
 
   const handleBack = () => {
-    if (state.step === "preview" && !state.selectedFlyer?.hasImageSlot) {
-      updateState({ step: "flyer-select" })
-      return
+    if (state.step === "preview") {
+      const needsMedia = ["carousel", "image", "single", "story", "reel"].includes(state.postType ?? "")
+      if (!state.selectedFlyer?.hasImageSlot && !needsMedia && !state.customFlyerFile) {
+        updateState({ step: "flyer-select" })
+        return
+      }
     }
     const prevIdx = currentStepIdx - 1
     if (prevIdx >= 0) {
@@ -204,61 +249,110 @@ export function PostWizard({ platform, open, onClose, prefill }: PostWizardProps
     onClose()
   }
 
+  // Capture all media to upload.
+  // Flyer template (carousel): each imageFile is a per-slide background, so we
+  //   render each FlyerCanvas with its background baked in. Number of slides =
+  //   1 (main background) + imageFiles.length (extra backgrounds).
+  // Flyer template (non-carousel): only the first flyer slide is captured.
+  // No template: return imageFiles directly (plain multi-image carousel).
+  const captureMedia = async (): Promise<File[]> => {
+    if (state.selectedFlyer) {
+      const flyers = state.generatedContent?.flyers ?? []
+      const isCarousel = state.postType === "carousel"
+      const maxSlides = isCarousel
+        ? Math.min(flyers.length, 1 + state.imageFiles.length)
+        : 1
+      const slides: File[] = []
+      for (let i = 0; i < maxSlides; i++) {
+        const flyer = flyers[i]
+        if (flyer?.customImageUrl) {
+          try {
+            const res = await fetch(flyer.customImageUrl)
+            const blob = await res.blob()
+            slides.push(new File([blob], `custom-flyer-${i + 1}.png`, { type: blob.type }))
+          } catch { /* skip broken blob */ }
+        } else {
+          const handle = flyerCanvasRefs.current[i]
+          if (handle) {
+            const file = await handle.captureAsFile(`flyer-${i + 1}.png`)
+            if (file) slides.push(file)
+          }
+        }
+      }
+      if (slides.length > 0) return slides
+    }
+    if (state.customFlyerFile) {
+      return state.imageFiles.length > 0
+        ? [state.customFlyerFile, ...state.imageFiles]
+        : [state.customFlyerFile]
+    }
+    if (state.imageFiles.length > 0) return state.imageFiles
+    if (state.imageFile) return [state.imageFile]
+    return []
+  }
+
   // Called when user clicks "Schedule" in preview — opens the date picker
   const handleSchedule = () => {
     setShowDatePicker(true)
   }
 
   // Called when user confirms a date in the date picker
-  const handleDateConfirmed = (date: Date) => {
+  const handleDateConfirmed = async (date: Date) => {
     const content = state.generatedContent
     const account = getAccount(state.platform)
 
-    console.log("[POST WIZARD] Scheduling post:", {
-      platform: state.platform,
-      scheduledAt: date,
-      cookiePresent: account.connected,
-      cookiePreview: account.sessionCookie
-        ? account.sessionCookie.slice(0, 8) + "…"
-        : "no cookie — connect account in Settings",
-    })
-
-    addScheduledPost({
-      platform: state.platform,
-      postType: state.postType ?? "single",
-      content: content?.caption ?? state.aiInput.topic,
-      caption: content?.caption,
-      hashtags: content?.hashtags,
-      scheduledAt: date,
-    })
-    setShowDatePicker(false)
-
-    const notConnected = !account.connected
-    toast.success("Post scheduled!", {
-      description: date.toLocaleString("en-US", {
-        weekday: "short",
-        month: "short",
-        day: "numeric",
-        hour: "numeric",
-        minute: "2-digit",
-      }),
-      ...(notConnected && {
-        description: "Note: connect your account in Settings to enable real posting",
-      }),
-    })
-    handleClose()
+    try {
+      await addScheduledPost({
+        platform: state.platform,
+        postType: state.postType ?? "single",
+        content: content?.caption ?? state.aiInput.topic,
+        caption: content?.caption,
+        hashtags: [],
+        threadParts: content?.threadPosts ?? undefined,
+        scheduledAt: date,
+        mediaFiles: await captureMedia(),
+      })
+      setShowDatePicker(false)
+      toast.success("Post scheduled!", {
+        description: account.connected
+          ? date.toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
+          : "Connect your account in Settings to enable real posting",
+      })
+      handleClose()
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to schedule post")
+    }
   }
 
-  const handleSaveDraft = () => {
-    const payload = {
-      platform: state.platform,
-      postType: state.postType,
-      content: state.generatedContent,
-      action: "draft",
+  const handleSaveDraft = async () => {
+    const content = state.generatedContent
+    try {
+      await addScheduledPost({
+        platform: state.platform,
+        postType: state.postType ?? "single",
+        content: content?.caption ?? state.aiInput.topic,
+        caption: content?.caption,
+        hashtags: [],
+        status: "draft",
+        mediaFiles: await captureMedia(),
+      })
+      toast.success("Saved as draft")
+      handleClose()
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to save draft")
     }
-    console.log("[POST WIZARD] Save draft:", payload)
-    toast.success("Saved as draft")
-    handleClose()
+  }
+
+  const handleSelectVariation = (idx: number) => {
+    const variations = state.generatedContent?.variations
+    if (!variations || !variations[idx]) return
+    // Swap active content to the selected variation, preserve the variations list
+    updateState({
+      generatedContent: {
+        ...variations[idx],
+        variations,
+      },
+    })
   }
 
   const handleSetLogo = (file: File, url: string) => {
@@ -269,12 +363,58 @@ export function PostWizard({ platform, open, onClose, prefill }: PostWizardProps
     updateState({ logoFile: null, logoPreviewUrl: null })
   }
 
-  const handleDuplicate = () => {
-    console.log("[POST WIZARD] Duplicate post:", state)
-    toast.info("Post duplicated", {
-      description: "A copy has been saved to your drafts",
-    })
-    handleClose()
+  const handleDuplicate = async () => {
+    const content = state.generatedContent
+    try {
+      await addScheduledPost({
+        platform: state.platform,
+        postType: state.postType ?? "single",
+        content: content?.caption ?? state.aiInput.topic,
+        caption: content?.caption,
+        hashtags: [],
+        status: "draft",
+        mediaFiles: await captureMedia(),
+      })
+      toast.info("Post duplicated", { description: "A copy has been saved to your drafts" })
+      handleClose()
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to duplicate post")
+    }
+  }
+
+  const handlePublishNow = async () => {
+    const content = state.generatedContent
+    const account = getAccount(state.platform)
+    if (!account.connected || !account.accountId) {
+      toast.error("Account not connected", {
+        description: "Go to Settings → Platform Connections to connect your account first",
+      })
+      return
+    }
+    setIsPublishing(true)
+    try {
+      const post = await addScheduledPost({
+        platform: state.platform,
+        postType: state.postType ?? "single",
+        content: content?.caption ?? state.aiInput.topic,
+        caption: content?.caption,
+        hashtags: [],
+        threadParts: content?.threadPosts ?? undefined,
+        platformAccountId: account.accountId,
+        status: "scheduled",
+        mediaFiles: await captureMedia(),
+      })
+      await publishNow(post.id)
+      toast.success("Publishing started!", {
+        description: "Your post is being published. This may take up to a minute.",
+        duration: 6000,
+      })
+      handleClose()
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to publish post")
+    } finally {
+      setIsPublishing(false)
+    }
   }
 
   const isFirstStep = currentStepIdx === 0
@@ -328,7 +468,8 @@ export function PostWizard({ platform, open, onClose, prefill }: PostWizardProps
               platform={state.platform}
               postType={state.postType}
               aiInput={state.aiInput}
-              hasBrandVoice={!!DUMMY_BRAND_VOICE}
+              hasBrandVoice={hasBrandVoice}
+              brandVoice={brandVoice}
               onChange={(updates) =>
                 updateState({ aiInput: { ...state.aiInput, ...updates } })
               }
@@ -337,6 +478,8 @@ export function PostWizard({ platform, open, onClose, prefill }: PostWizardProps
 
           {state.step === "flyer-select" && (
             <StepFlyerSelect
+              platform={state.platform}
+              postType={state.postType}
               selected={state.selectedFlyer}
               customFlyerPreviewUrl={state.customFlyerPreviewUrl}
               onSelect={(flyer) => updateState({
@@ -356,21 +499,31 @@ export function PostWizard({ platform, open, onClose, prefill }: PostWizardProps
               onSkip={() => {
                 updateState({ selectedFlyer: null, customFlyerFile: null, customFlyerPreviewUrl: null })
                 markStepComplete("flyer-select")
-                updateState({ step: "preview" })
+                // Route through the same logic as handleNext so carousel/image posts
+                // reach the image-upload step instead of jumping straight to preview
+                const needsMedia = ["carousel", "image", "single", "story", "reel"].includes(state.postType ?? "")
+                updateState({ step: needsMedia ? "image-upload" : "preview" })
               }}
             />
           )}
 
           {state.step === "image-upload" && (
             <StepImageUpload
+              platform={state.platform}
+              postType={state.postType}
               selectedFlyer={state.selectedFlyer}
               imageSuggestion={state.generatedContent?.imageSuggestion ?? ""}
               imagePreviewUrl={state.imagePreviewUrl}
+              imageFiles={state.imageFiles}
+              imagePreviewUrls={state.imagePreviewUrls}
               onImageSelect={(file, url) =>
                 updateState({ imageFile: file, imagePreviewUrl: url })
               }
               onImageClear={() =>
                 updateState({ imageFile: null, imagePreviewUrl: null })
+              }
+              onImagesChange={(files, urls) =>
+                updateState({ imageFiles: files, imagePreviewUrls: urls })
               }
             />
           )}
@@ -379,6 +532,7 @@ export function PostWizard({ platform, open, onClose, prefill }: PostWizardProps
             <StepPreview
               state={state}
               content={state.generatedContent}
+              flyerRefs={flyerCanvasRefs}
               onUpdateCaption={(caption) => {
                 if (!state.generatedContent) return
                 updateState({ generatedContent: { ...state.generatedContent, caption } })
@@ -432,9 +586,12 @@ export function PostWizard({ platform, open, onClose, prefill }: PostWizardProps
               }}
               onSetLogo={handleSetLogo}
               onClearLogo={handleClearLogo}
+              onPublishNow={getAccount(state.platform).connected ? handlePublishNow : undefined}
+              isPublishing={isPublishing}
               onSchedule={handleSchedule}
               onSaveDraft={handleSaveDraft}
               onDuplicate={handleDuplicate}
+              onSelectVariation={handleSelectVariation}
             />
           )}
         </div>
@@ -492,6 +649,48 @@ export function PostWizard({ platform, open, onClose, prefill }: PostWizardProps
       onClose={() => setShowDatePicker(false)}
       onConfirm={handleDateConfirmed}
     />
+
+    {/* AI error / quota modal */}
+    <Dialog open={!!aiError} onOpenChange={(v) => !v && setAiError(null)}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-base">
+            <Sparkles className="size-4 text-primary" />
+            {aiError?.toLowerCase().includes("generation") || aiError?.toLowerCase().includes("upgrade")
+              ? "AI Generation Limit Reached"
+              : "AI Generation Error"}
+          </DialogTitle>
+        </DialogHeader>
+        <p className="text-sm text-muted-foreground leading-relaxed">{aiError}</p>
+        {(aiError?.toLowerCase().includes("generation") || aiError?.toLowerCase().includes("upgrade")) && (
+          <p className="text-xs text-muted-foreground bg-muted/50 rounded-md px-3 py-2">
+            Upgrade your plan to get more AI generations and unlock unlimited posting.
+          </p>
+        )}
+        <div className="flex gap-2 pt-1">
+          {(aiError?.toLowerCase().includes("generation") || aiError?.toLowerCase().includes("upgrade")) && (
+            <Button
+              size="sm"
+              className="flex-1"
+              onClick={() => {
+                setAiError(null)
+                window.location.href = "/subscription"
+              }}
+            >
+              View Plans
+            </Button>
+          )}
+          <Button
+            size="sm"
+            variant={aiError?.toLowerCase().includes("upgrade") ? "outline" : "default"}
+            className="flex-1"
+            onClick={() => setAiError(null)}
+          >
+            Close
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
     </>
   )
 }

@@ -29,7 +29,6 @@ import {
 import { PostWizard } from "@/components/post-wizard/post-wizard"
 import { ReplyComposer } from "@/components/composers/reply-composer"
 import { EngageComposer } from "@/components/composers/engage-composer"
-import { DUMMY_PLATFORM_STATS } from "@/lib/dummy-data"
 import { usePostsContext } from "@/lib/posts-context"
 import { cn } from "@/lib/utils"
 import type { Platform, ScheduledPost } from "@/lib/types"
@@ -80,6 +79,7 @@ const PLATFORM_META: Record<
 const STATUS_STYLES: Record<string, string> = {
   scheduled: "bg-blue-50 text-blue-700 dark:bg-blue-950/30 dark:text-blue-400",
   draft: "bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400",
+  publishing: "bg-purple-50 text-purple-700 dark:bg-purple-950/30 dark:text-purple-400",
   published: "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-400",
   failed: "bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-400",
 }
@@ -340,8 +340,14 @@ export function PlatformDashboardPage({ platform }: { platform: Platform }) {
   const [openDialog, setOpenDialog] = useState<OpenDialog>(null)
 
   const meta = PLATFORM_META[platform]
-  const stats = DUMMY_PLATFORM_STATS.find((s) => s.platform === platform)!
   const Icon = meta.Icon
+  const platformPosts = scheduledPosts.filter((p) => p.platform === platform)
+  const stats = {
+    scheduledCount: platformPosts.filter((p) => p.status === "scheduled").length,
+    draftCount: platformPosts.filter((p) => p.status === "draft").length,
+    publishedThisWeek: platformPosts.filter((p) => p.status === "published").length,
+    engagementRate: undefined as string | undefined,
+  }
 
   return (
     <div className="flex-1 flex flex-col min-h-0">

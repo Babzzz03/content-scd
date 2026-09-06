@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import {
   TrendingUp,
   Sparkles,
@@ -31,8 +31,9 @@ import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { generateMarketingStrategy } from "@/lib/ai-mock"
-import { DUMMY_BRAND_VOICE } from "@/lib/dummy-data"
+import { brandVoiceApi } from "@/lib/api/brand-voice"
 import { useAIProvider } from "@/lib/ai-provider-context"
+import type { BrandVoice } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 import type {
@@ -177,7 +178,14 @@ export default function MarketingStrategyPage() {
   const [input, setInput] = useState<MarketingStrategyInput>(INITIAL_INPUT)
   const [strategy, setStrategy] = useState<MarketingStrategy | null>(null)
   const [isGenerating, setIsGenerating] = useState(false)
+  const [brandVoice, setBrandVoice] = useState<BrandVoice | null>(null)
   const { activeProvider } = useAIProvider()
+
+  useEffect(() => {
+    brandVoiceApi.get().then((bv) => {
+      if (bv.brandName) setBrandVoice(bv)
+    }).catch(() => {})
+  }, [])
   const [activeTab, setActiveTab] = useState<
     "overview" | "pillars" | "tactics" | "tools" | "kpis" | "roadmap"
   >("overview")
@@ -396,13 +404,13 @@ export default function MarketingStrategyPage() {
                 />
               </div>
             </div>
-            {input.useBrandVoice && DUMMY_BRAND_VOICE && (
+            {input.useBrandVoice && brandVoice && (
               <div className="mt-2 pt-2 border-t border-primary/20">
                 <p className="text-xs text-muted-foreground">
                   <span className="font-medium text-foreground">
-                    {DUMMY_BRAND_VOICE.brandName}
+                    {brandVoice.brandName}
                   </span>{" "}
-                  · {DUMMY_BRAND_VOICE.industry} · {DUMMY_BRAND_VOICE.targetAudience}
+                  {brandVoice.industry && `· ${brandVoice.industry}`}{brandVoice.targetAudience && ` · ${brandVoice.targetAudience}`}
                 </p>
               </div>
             )}

@@ -536,6 +536,15 @@ export interface CampaignSendState {
   sentToday: number
 }
 
+export interface CampaignProgress {
+  phase: "idle" | "planning" | "collecting" | "enriching" | "saving" | "drafting" | "done" | "error"
+  message: string
+  current: number
+  total: number
+  detail: string
+  updatedAt: string | null
+}
+
 export interface LeadCampaign {
   _id: string
   name: string
@@ -573,6 +582,7 @@ export interface LeadCampaign {
   firstSentAt: string | null
   lastDiscoveryAt: string | null
   lastError: string | null
+  progress?: CampaignProgress
   sendState?: CampaignSendState
   createdAt: string
 }

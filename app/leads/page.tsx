@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge"
 import { Card, CardContent } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Progress } from "@/components/ui/progress"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -25,7 +26,10 @@ import { toast } from "sonner"
 
 /** Review queue first — that is where the work is. */
 const STATUS_TABS: { value: string; label: string; statuses?: LeadStatus[] }[] = [
-  { value: "review",   label: "To review", statuses: ["drafted"] },
+  // Anything awaiting a human decision, not just finished drafts. Leads sit in
+  // "enriched" until the drafting job runs, and showing only "drafted" made
+  // freshly found leads invisible in the default tab.
+  { value: "review",   label: "To review", statuses: ["drafted", "qualified", "enriched"] },
   { value: "approved", label: "Approved",  statuses: ["approved", "queued"] },
   { value: "sent",     label: "Sent",      statuses: ["messaged"] },
   { value: "replied",  label: "Replied",   statuses: ["replied"] },
@@ -95,11 +99,13 @@ export default function LeadsPage() {
   // Discovery runs in the background, so poll while it is going
   useEffect(() => {
     if (campaign?.status !== "discovering") return
+    // 3s rather than 15s: the progress bar is the only signal that a
+    // multi-minute run is alive, so it needs to visibly move.
     const timer = setInterval(async () => {
       const list = await loadCampaigns()
       const fresh = list.find((c) => c._id === activeCampaign)
       if (fresh && fresh.status !== "discovering") loadLeads()
-    }, 15000)
+    }, 3000)
     return () => clearInterval(timer)
   }, [campaign?.status, activeCampaign, loadCampaigns, loadLeads])
 
@@ -275,6 +281,42 @@ export default function LeadsPage() {
                   </Button>
                 </div>
               </>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ── Live discovery progress ────────────────────────────────────── */}
+      {campaign?.progress && campaign.progress.phase !== "idle" && (
+        <Card>
+          <CardContent className="space-y-2 p-3">
+            <div className="flex items-center gap-2">
+              {["planning", "collecting", "enriching", "saving", "drafting"].includes(campaign.progress.phase) ? (
+                <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
+              ) : campaign.progress.phase === "error" ? (
+                <AlertTriangle className="size-3.5 shrink-0 text-destructive" />
+              ) : (
+                <Check className="size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+              )}
+              <span className="text-sm font-medium">
+                {campaign.progress.message || campaign.progress.phase}
+              </span>
+              {campaign.progress.total > 0 && (
+                <span className="ml-auto text-xs tabular-nums text-muted-foreground">
+                  {campaign.progress.current} / {campaign.progress.total}
+                </span>
+              )}
+            </div>
+
+            {campaign.progress.total > 0 && (
+              <Progress
+                value={Math.min(100, (campaign.progress.current / campaign.progress.total) * 100)}
+                className="h-1.5"
+              />
+            )}
+
+            {campaign.progress.detail && (
+              <p className="truncate text-xs text-muted-foreground">{campaign.progress.detail}</p>
             )}
           </CardContent>
         </Card>

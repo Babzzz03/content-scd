@@ -8,6 +8,8 @@ import { LEAD_STATUS_LABEL, type Lead } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 const STATUS_STYLE: Partial<Record<Lead["status"], string>> = {
+  enriched:  "bg-muted text-muted-foreground",
+  qualified: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
   drafted:   "bg-blue-500/10 text-blue-600 dark:text-blue-400",
   approved:  "bg-violet-500/10 text-violet-600 dark:text-violet-400",
   messaged:  "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",

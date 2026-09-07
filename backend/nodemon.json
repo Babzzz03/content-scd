@@ -1,0 +1,13 @@
+{
+  "watch": ["server.js", "src", "automation"],
+  "ext": "js,json",
+  "ignore": [
+    "automation/sessions/*",
+    "logs/*",
+    "node_modules/*",
+    "*.log",
+    "test_*.js",
+    "scripts/*"
+  ],
+  "delay": 1000
+}

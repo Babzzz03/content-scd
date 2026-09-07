@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "PostFlow Cookie Helper",
+  "description": "Instantly grab your X, LinkedIn, and Instagram session cookies for PostFlow automation.",
+  "version": "1.0.0",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "PostFlow Cookie Helper"
+  },
+  "permissions": [
+    "cookies",
+    "clipboardWrite"
+  ],
+  "host_permissions": [
+    "https://x.com/*",
+    "https://twitter.com/*",
+    "https://www.linkedin.com/*",
+    "https://www.instagram.com/*"
+  ]
+}

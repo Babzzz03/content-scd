@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PostFlow Cookie Helper</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div class="app">
+    <!-- Header -->
+    <header class="header">
+      <div class="logo">
+        <div class="logo-icon">⚡</div>
+        <div>
+          <div class="logo-title">PostFlow</div>
+          <div class="logo-sub">Cookie Helper</div>
+        </div>
+      </div>
+    </header>
+
+    <!-- Loading state -->
+    <div id="loading" class="loading">
+      <div class="spinner"></div>
+      <p>Reading cookies…</p>
+    </div>
+
+    <!-- Main content -->
+    <div id="content" class="content hidden">
+
+      <!-- Info banner -->
+      <div class="banner">
+        <span class="banner-icon">🔑</span>
+        <p>Cookies are read locally and never sent anywhere. Copy and paste into PostFlow Settings.</p>
+      </div>
+
+      <!-- Platform rows -->
+      <div class="platforms" id="platforms"></div>
+
+      <!-- Open PostFlow button -->
+      <div class="footer">
+        <button class="btn-open" id="openPostFlow">Open PostFlow Settings →</button>
+        <p class="footer-note">Cookies expire when you log out of the platform.</p>
+      </div>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

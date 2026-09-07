@@ -17,6 +17,7 @@ import {
   ChevronUp,
   PlayCircle,
   Radar,
+  MapPin,
 } from "lucide-react"
 import { useTour } from "@/lib/tour-context"
 import { XIcon, LinkedInIcon, InstagramIcon } from "@/components/ui/platform-icons"
@@ -88,6 +89,12 @@ const NAV_ITEMS = [
     icon: Radar,
     href: "/leads",
     tourId: "nav-leads",
+  },
+  {
+    label: "Google Leads",
+    icon: MapPin,
+    href: "/google-leads",
+    tourId: "nav-google-leads",
   },
   {
     label: "Content Ideas",

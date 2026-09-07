@@ -449,8 +449,33 @@ export type LeadStatus =
   | "skipped"
   | "failed"
   | "opted_out"
+  | "to_call"
+  | "contacted"
+  | "callback"
+  | "won"
+  | "lost"
 
 export type LeadFit = "strong" | "moderate" | "weak" | "unqualified" | null
+
+export type LeadSource = "instagram" | "google_maps"
+
+export type CallOutcome =
+  | "interested"
+  | "callback"
+  | "not_interested"
+  | "no_answer"
+  | "wrong_number"
+
+export interface GooglePlaceData {
+  placeId: string
+  formattedAddress: string
+  phone: string
+  rating: number
+  reviewCount: number
+  businessStatus: string
+  primaryType: string
+  mapsUri: string
+}
 
 export type CampaignStatus =
   | "draft"
@@ -471,6 +496,14 @@ export interface LeadContact {
 export interface Lead {
   _id: string
   campaign?: string
+  source: LeadSource
+  externalId: string
+  google?: GooglePlaceData
+  callScript: string
+  contactedAt: string | null
+  contactMethod: "call" | "whatsapp" | "email" | "dm" | null
+  callOutcome: CallOutcome | null
+  notes: string
   username: string
   fullName: string
   profileUrl: string
@@ -548,6 +581,8 @@ export interface CampaignProgress {
 export interface LeadCampaign {
   _id: string
   name: string
+  source: LeadSource
+  region?: string
   platformAccountId: string
   status: CampaignStatus
   search: {
@@ -584,6 +619,9 @@ export interface LeadCampaign {
   lastError: string | null
   progress?: CampaignProgress
   sendState?: CampaignSendState
+  /** When the next continuation batch is scheduled, if any */
+  continuesAt?: string | null
+  emptyRuns?: number
   createdAt: string
 }
 
@@ -607,4 +645,18 @@ export const LEAD_STATUS_LABEL: Record<LeadStatus, string> = {
   skipped:   "Skipped",
   failed:    "Failed",
   opted_out: "Opted out",
+  to_call:   "To call",
+  contacted: "Contacted",
+  callback:  "Call back",
+  won:       "Interested",
+  lost:      "Not interested",
+}
+
+/** Call outcome labels for the Google call sheet. */
+export const CALL_OUTCOME_LABEL: Record<CallOutcome, string> = {
+  interested:     "Interested",
+  callback:       "Call back later",
+  not_interested: "Not interested",
+  no_answer:      "No answer",
+  wrong_number:   "Wrong number",
 }

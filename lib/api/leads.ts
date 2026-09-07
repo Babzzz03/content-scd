@@ -104,6 +104,22 @@ export const leadsApi = {
     return res
   },
 
+  // ── Google Maps call list ──────────────────────────────────────────────────
+  generateScript: async (id: string, channel: "call" | "whatsapp" = "call") => {
+    const res = await post<Envelope<{ lead: Lead; script: string; hook: string; objection: string }>>(
+      `/leads/${id}/script`, { channel }
+    )
+    return res.data
+  },
+
+  recordOutcome: async (
+    id: string,
+    body: { outcome?: string; method?: "call" | "whatsapp"; notes?: string }
+  ) => {
+    const res = await post<Envelope<{ lead: Lead }>>(`/leads/${id}/outcome`, body)
+    return res.data.lead
+  },
+
   bulk: async (ids: string[], action: "approve" | "skip", reason?: string) => {
     const res = await post<Envelope<{ changed: number; blocked: number }>>("/leads/bulk", { ids, action, reason })
     return res

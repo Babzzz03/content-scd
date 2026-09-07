@@ -35,6 +35,7 @@ npm-debug.log*
 # ── Local repo artefacts from the monorepo restructure ────────────────────────
 .git-root-backup/
 .git-content-scd/
+.git-old-local-backup/
 
 # ── Local scratch ─────────────────────────────────────────────────────────────
 *.tmp

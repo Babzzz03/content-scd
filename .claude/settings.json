@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(npm run dev:*)",
+      "Bash(npm run build:*)",
+      "Bash(npm run lint:*)",
+      "Bash(npx tsc --noEmit:*)",
+      "Bash(npx next build:*)",
+      "Bash(curl -s http://localhost:3000/*)",
+      "Bash(curl -s http://localhost:5000/*)",
+      "Bash(node --check:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)"
+    ],
+    "ask": [
+      "Bash(node test_leadgen.js dm-send:*)",
+      "Bash(node test_leadgen.js maps:*)",
+      "Bash(git push:*)"
+    ]
+  }
+}

@@ -32,6 +32,12 @@ npm-debug.log*
 .vscode/
 .idea/
 
+# ── Claude Code ───────────────────────────────────────────────────────────────
+# settings.json is shared; settings.local.json is per-machine and may hold
+# permissions specific to one developer's setup.
+.claude/settings.local.json
+.claude/*.local.json
+
 # ── Local repo artefacts from the monorepo restructure ────────────────────────
 .git-root-backup/
 .git-content-scd/

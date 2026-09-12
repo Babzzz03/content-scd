@@ -48,6 +48,79 @@ const dismissDialogs = async (page) => {
 }
 
 /**
+ * Like a couple of the target's recent posts before messaging them.
+ *
+ * Two reasons, and the second matters more:
+ *
+ * 1. A profile visit and a like put you in their notifications before the DM
+ *    lands, so the message arrives from a name they have already seen.
+ * 2. A cold DM from an account that has never interacted with the recipient is
+ *    the strongest single spam signal Instagram has. Engaging first makes the
+ *    sequence look like what a person actually does.
+ *
+ * Entirely best-effort. Warming is an enhancement, so any failure here is
+ * swallowed and the DM proceeds regardless.
+ *
+ * @returns {Promise<number>} how many posts were liked
+ */
+const warmUpTarget = async (page, human, username, { likes = 2 } = {}) => {
+  let liked = 0
+  try {
+    await page.goto(sel.profileUrl(username), { waitUntil: 'domcontentloaded', timeout: 30000 })
+    await sleep(randInt(2500, 4500))
+
+    // Read the profile briefly, the way a person would before engaging
+    await human.scroll('down', randInt(250, 500)).catch(() => {})
+    await sleep(randInt(1500, 3000))
+
+    const postLinks = await page.$$eval(
+      'a[href*="/p/"], a[href*="/reel/"]',
+      (els) => els.map((e) => e.getAttribute('href')).filter(Boolean).slice(0, 6)
+    ).catch(() => [])
+
+    if (!postLinks.length) {
+      logger.debug('warmUpTarget: no posts visible', { username })
+      return 0
+    }
+
+    for (const href of postLinks.slice(0, likes)) {
+      try {
+        await page.goto(`https://www.instagram.com${href}`, { waitUntil: 'domcontentloaded', timeout: 25000 })
+
+        // Poll for the like control rather than sleeping a fixed interval
+        const deadline = Date.now() + 12000
+        let clicked = false
+        while (Date.now() < deadline && !clicked) {
+          clicked = await page.evaluate(() => {
+            // Already liked shows "Unlike", so this is idempotent
+            if (document.querySelector('svg[aria-label="Unlike"]')) return 'already'
+            const icon = document.querySelector('svg[aria-label="Like"]')
+            if (!icon) return false
+            let el = icon
+            while (el && el.tagName !== 'BUTTON' && el.getAttribute('role') !== 'button') el = el.parentElement
+            if (!el) return false
+            el.click()
+            return true
+          }).catch(() => false)
+          if (!clicked) await sleep(600)
+        }
+
+        if (clicked === true) {
+          liked++
+          logger.debug('warmUpTarget: liked a post', { username })
+        }
+
+        // Dwell on the post like a reader, not a bot ticking through
+        await sleep(randInt(3000, 7000))
+      } catch { /* skip this post */ }
+    }
+  } catch (err) {
+    logger.debug('warmUpTarget: failed, sending anyway', { username, err: err.message })
+  }
+  return liked
+}
+
+/**
  * Have we already talked to this person?
  *
  * Checks the inbox for an existing thread with them. This is authoritative:
@@ -224,7 +297,7 @@ const openThreadFromNewMessage = async (page, username) => {
  * @returns {Promise<{ sent: boolean, reason?: string, threadUrl: string|null }>}
  */
 const sendDm = async (page, human, payload) => {
-  const { username, message, dryRun = false } = payload
+  const { username, message, dryRun = false, warmUp = true, warmUpLikes = 2 } = payload
 
   if (!username) throw new Error('sendDm: username is required')
   if (!message || !message.trim()) throw new Error('sendDm: message is empty')
@@ -239,6 +312,14 @@ const sendDm = async (page, human, payload) => {
   if (await threadHasHistory(page, username)) {
     logger.info('sendDm: existing conversation found, refusing to send', { username })
     return { sent: false, reason: 'Already in conversation with this account', threadUrl: null }
+  }
+
+  // Engage before messaging: a like puts you in their notifications first, and
+  // a DM from an account with no prior interaction is the strongest spam signal.
+  if (warmUp && !dryRun) {
+    const liked = await warmUpTarget(page, human, username, { likes: warmUpLikes })
+    logger.info('sendDm: warmed target before messaging', { username, liked })
+    await sleep(randInt(4000, 9000))
   }
 
   // Compose dialog first: it works regardless of whether the target's profile
@@ -308,4 +389,4 @@ const sendDm = async (page, human, payload) => {
   return { sent: true, threadUrl }
 }
 
-module.exports = { sendDm }
+module.exports = { sendDm, warmUpTarget }

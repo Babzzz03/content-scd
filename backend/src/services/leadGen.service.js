@@ -21,6 +21,7 @@ const User            = require('../models/User')
 const { decryptObject } = require('./encryption.service')
 const { passesHardFilters, scoreLead, extractContact, detectHasWebsite } = require('./leadScoring.service')
 const { expandLeadQueries, qualifyLead, draftLeadDm } = require('./deepseek.service')
+const { linkDuplicates } = require('./leadIdentity.service')
 const AutomationHub = require('../../automation')
 const accountHealth = require('./accountHealth.service')
 const { OUTREACH, PLANS } = require('../config/constants')
@@ -313,10 +314,12 @@ const runDiscovery = async (campaignId) => {
     for (const profile of result.leads) {
       const { score, reasons } = scoreLead(profile, campaign)
       try {
-        await Lead.create({
+        const created = await Lead.create({
           user:     campaign.user,
           campaign: campaign._id,
+          source:   'instagram',
           platform: 'instagram',
+          externalId: profile.username,
           ...profile,
           contact:      extractContact(profile),
           hasWebsite:   detectHasWebsite(profile),
@@ -325,6 +328,8 @@ const runDiscovery = async (campaignId) => {
           status: 'enriched',
         })
         saved++
+        // Same-business detection across Instagram and Google Maps
+        linkDuplicates(created._id).catch(() => {})
       } catch (err) {
         if (err.code !== 11000) logger.warn('runDiscovery: lead save failed', { err: err.message })
         // 11000 = duplicate username, which just means another campaign found them first
@@ -435,6 +440,18 @@ const sendLeadDm = async (leadId, { force = false } = {}) => {
   if (lead.status === 'opted_out') return { sent: false, reason: 'Lead opted out' }
   if (['messaged', 'replied'].includes(lead.status)) return { sent: false, reason: 'Already messaged' }
 
+  // The same business may exist under another source with its own row. DMing
+  // someone who was phoned this morning reads as spam, so refuse.
+  const { alreadyContacted } = require('./leadIdentity.service')
+  const twin = await alreadyContacted(lead)
+  if (twin) {
+    return {
+      sent: false,
+      reason: `Already contacted via ${twin.source === 'google_maps' ? 'phone' : 'Instagram'} on `
+            + `${new Date(twin.contactedAt || twin.messagedAt || twin.updatedAt).toDateString()}`,
+    }
+  }
+
   const message = (lead.approvedMessage || lead.draftMessage || '').trim()
   if (!message) return { sent: false, reason: 'No approved message to send' }
 
@@ -461,6 +478,8 @@ const sendLeadDm = async (leadId, { force = false } = {}) => {
     const result = await runTask(account, cookie, 'send-dm', {
       username: lead.username,
       message,
+      warmUp:      campaign.messageSettings?.engageBeforeDm !== false,
+      warmUpLikes: campaign.messageSettings?.engageLikes ?? 2,
     })
 
     if (!result.sent) {
@@ -481,6 +500,10 @@ const sendLeadDm = async (leadId, { force = false } = {}) => {
     lead.threadUrl = result.threadUrl || ''
     lead.sendError = null
     await lead.save()
+
+    // Records the touch and schedules the next one, if the sequence continues
+    const { recordTouch } = require('./followUp.service')
+    await recordTouch(lead._id, { text: message, channel: 'dm' })
 
     campaign.sentToday += 1
     campaign.stats.sent += 1
@@ -551,12 +574,16 @@ const syncReplies = async (campaignId) => {
 
     if (reply.optOut) {
       lead.status = 'opted_out'
+      lead.optedOut = true
+      lead.optedOutAt = new Date()
       lead.skipReason = 'Recipient asked not to be contacted'
       if (wasNew) optOuts++
     } else {
       lead.status = 'replied'
       if (wasNew) replies++
     }
+    // Someone who answered must never receive a scheduled follow-up
+    lead.nextFollowUpAt = null
     await lead.save()
   }
 

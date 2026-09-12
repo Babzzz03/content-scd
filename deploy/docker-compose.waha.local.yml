@@ -1,0 +1,56 @@
+# ─── WAHA for local development ───
+#
+# The Oracle compose file is for production: a public VPS, a domain, Caddy and
+# Let's Encrypt. None of that is needed to try WhatsApp on your own machine.
+#
+# This runs WAHA on localhost:3000. Your backend on localhost:5000 talks to it
+# directly, and WAHA reaches your backend at host.docker.internal, which Docker
+# Desktop maps to the Mac. No VPS, no domain, no tunnel.
+#
+#   docker compose -f deploy/docker-compose.waha.local.yml up -d
+#   open http://localhost:3002/dashboard
+#
+# Port note: WAHA listens on 3000 inside the container, but 3000 and 3001 are both
+# taken by Next.js dev servers on this machine, so it is published on 3002.
+#
+# Image note: this is the default amd64 tag, correct for an Intel Mac. On Apple
+# Silicon use devlikeapro/waha:noweb-arm instead.
+
+services:
+  waha:
+    image: devlikeapro/waha:noweb
+    container_name: waha-local
+    restart: unless-stopped
+    ports:
+      # host:container. 3001 on the host because Next.js dev holds 3000.
+      - "3002:3000"
+
+    environment:
+      # Local only, but the backend still sends it, so the values must match
+      # backend/.env or every call returns 401.
+      - WAHA_API_KEY=local-dev-key-change-me
+
+      - WHATSAPP_DEFAULT_ENGINE=NOWEB
+
+      # Sessions survive a container restart, so you scan the QR once
+      - WHATSAPP_RESTART_ALL_SESSIONS=True
+
+      # Where WAHA POSTs incoming messages. host.docker.internal is how a
+      # container reaches the host on Docker Desktop; plain localhost would
+      # resolve to the container itself and the webhook would silently vanish.
+      - WHATSAPP_HOOK_URL=http://host.docker.internal:5000/api/whatsapp/webhook
+      - WHATSAPP_HOOK_EVENTS=message,message.any,session.status
+
+      # Dashboard is unauthenticated here because it is bound to localhost.
+      # Never do this on a public host.
+      - WAHA_DASHBOARD_ENABLED=True
+
+    volumes:
+      # Session data outlives the container
+      - waha-sessions:/app/.sessions
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  waha-sessions:

@@ -11,7 +11,17 @@ const logger = require('../utils/logger')
 // ─── Campaigns ────────────────────────────────────────────────────────────────
 
 const listCampaigns = async (req, res) => {
-  const campaigns = await LeadCampaign.find({ user: req.user._id })
+  const filter = { user: req.user._id }
+
+  // Instagram and Google campaigns have separate pages and separate workflows.
+  // Legacy campaigns predate the field, so absent means instagram.
+  if (req.query.source === 'google_maps') {
+    filter.source = 'google_maps'
+  } else if (req.query.source === 'instagram') {
+    filter.$or = [{ source: 'instagram' }, { source: { $exists: false } }, { source: null }]
+  }
+
+  const campaigns = await LeadCampaign.find(filter)
     .sort({ createdAt: -1 })
     .lean()
 
@@ -165,6 +175,19 @@ const setCampaignStatus = (status) => async (req, res) => {
   const campaign = await LeadCampaign.findOne({ _id: req.params.id, user: req.user._id })
   if (!campaign) return notFound(res, 'Campaign not found')
   campaign.status = status
+
+  // Pausing stops the work, so an in-flight phase must not keep spinning
+  if (status === 'paused') {
+    const IN_FLIGHT = ['planning', 'collecting', 'enriching', 'saving', 'drafting']
+    if (IN_FLIGHT.includes(campaign.progress?.phase)) {
+      campaign.progress.phase = 'idle'
+      campaign.progress.message = 'Paused'
+      campaign.progress.detail = ''
+      campaign.progress.updatedAt = new Date()
+    }
+    campaign.continuesAt = null
+  }
+
   await campaign.save()
   ok(res, { campaign }, status === 'paused' ? 'Campaign paused' : 'Campaign resumed')
 }
@@ -407,7 +430,23 @@ const recordOutcome = async (req, res) => {
   if (notes !== undefined) lead.notes = String(notes).slice(0, 2000)
 
   await lead.save()
-  ok(res, { lead }, 'Saved')
+
+  // A call is a touch. Reaching them, or being told no, ends the sequence;
+  // no answer schedules another attempt.
+  if (outcome) {
+    const { recordTouch, stopSequence } = require('../services/followUp.service')
+    if (['interested', 'not_interested', 'wrong_number'].includes(outcome)) {
+      await stopSequence(lead._id, outcome)
+    } else {
+      await recordTouch(lead._id, {
+        text: lead.callScript || '(call attempt)',
+        channel: method === 'whatsapp' ? 'whatsapp' : 'call',
+      })
+    }
+  }
+
+  const fresh = await Lead.findById(lead._id).lean()
+  ok(res, { lead: fresh }, 'Saved')
 }
 
 /** CSV export of the current filter set, for working leads outside the app. */

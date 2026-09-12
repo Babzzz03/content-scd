@@ -9,7 +9,7 @@ const logger = require('./src/utils/logger')
 const { ok, error: apiError } = require('./src/utils/apiResponse')
 const routes = require('./src/routes')
 const { initAgenda } = require('./src/jobs/agenda')
-const { recoverStuckPosts } = require('./src/jobs/postScheduler.job')
+const { recoverStuckPosts, recoverStuckCampaigns } = require('./src/jobs/postScheduler.job')
 
 // ─── App ──────────────────────────────────────────────────────────────────────
 const app = express()
@@ -62,8 +62,30 @@ const PORT = parseInt(process.env.PORT || '5000', 10)
 ;(async () => {
   try {
     await connectDB()
-    await recoverStuckPosts()
-    await initAgenda()
+    /**
+     * Job processing is optional per instance.
+     *
+     * Scraping launches real Chromium browsers, which need 400 to 600 MB. A
+     * small hosted instance (Railway free is 0.5 GB) can serve the API and
+     * receive WhatsApp webhooks comfortably at ~120 MB, but would be OOM
+     * killed the moment a browser starts.
+     *
+     * Two flags, because "jobs" is not all or nothing:
+     *   ENABLE_JOBS=false          HTTP only, no Agenda at all
+     *   ENABLE_BROWSER_JOBS=false  run light jobs (WhatsApp sending, follow-up
+     *                              drafting) but never launch Chromium
+     *
+     * A hosted instance uses the second, so WhatsApp keeps working while the
+     * laptop is closed and only scraping waits for a machine with RAM. Both
+     * share one MongoDB, and Agenda's locking stops a job running twice.
+     */
+    if (process.env.ENABLE_JOBS === 'false') {
+      logger.info('Job processing disabled (ENABLE_JOBS=false). Serving HTTP only.')
+    } else {
+      await recoverStuckPosts()
+      await recoverStuckCampaigns()
+      await initAgenda()
+    }
     app.listen(PORT, () => {
       logger.info(`PostFlow API running on port ${PORT} [${process.env.NODE_ENV}]`)
     })

@@ -103,6 +103,34 @@ const leadCampaignSchema = new mongoose.Schema(
       timezone:   { type: String, default: 'Africa/Lagos' },
       /** Ramp sends up over the first days instead of hitting the cap on day 1 */
       useWarmup:  { type: Boolean, default: true },
+
+      /**
+       * Like a couple of the recipient's posts before the DM. Puts you in their
+       * notifications first, and makes the DM look less like a cold blast.
+       */
+      engageBeforeDm: { type: Boolean, default: true },
+      engageLikes:    { type: Number,  default: 2, min: 0, max: 3 },
+    },
+
+    /**
+     * Follow-up sequence.
+     *
+     * Most replies to cold outreach come from the second or third touch, not
+     * the first. Without this a lead that does not answer is simply abandoned,
+     * which throws away the majority of the response rate.
+     *
+     * Stops immediately on a reply or an opt out. Never sends more than
+     * maxTouches in total, counting the original message as touch 1.
+     */
+    followUp: {
+      enabled:    { type: Boolean, default: true },
+      /**
+       * Days to wait after the previous touch, per step. [3, 5] means touch 2
+       * three days after the first, touch 3 five days after that.
+       */
+      delaysDays: { type: [Number], default: [3, 6] },
+      /** Original message counts as touch 1, so 3 means at most 2 follow-ups. */
+      maxTouches: { type: Number, default: 3, min: 1, max: 4 },
     },
 
     // ── Run bookkeeping ────────────────────────────────────────────────────

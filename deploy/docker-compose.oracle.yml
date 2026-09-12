@@ -1,0 +1,89 @@
+# ─── PostFlow always-on half, on an Oracle x86 micro ───
+#
+# Runs the two things that need to be up when your laptop is not:
+#
+#   waha      the WhatsApp connection, which must hold a persistent socket
+#   backend   HTTP + webhooks + the jobs that need no browser
+#
+# What this box deliberately does NOT do is scrape. Playwright launches real
+# Chromium at 400-600MB, which does not fit next to WAHA in 1GB, and more
+# importantly this is a datacenter IP. Instagram and Google both flag those far
+# faster than a home connection, so scraping stays on the laptop where the
+# residential IP is the asset.
+#
+#   docker compose -f deploy/docker-compose.oracle.yml up -d
+#
+# Shape: VM.Standard.E2.1.Micro (x86, 1GB, always free, 2 per account).
+# NOT the Ampere A1 ARM shape, which is the one with the capacity lottery.
+# Being x86 means the standard image tags work, no -arm variants needed.
+
+services:
+  waha:
+    image: devlikeapro/waha:noweb
+    container_name: waha
+    restart: unless-stopped
+    environment:
+      - WAHA_API_KEY=${WAHA_API_KEY}
+      - WHATSAPP_DEFAULT_ENGINE=NOWEB
+      # Sessions survive a restart, so a reboot does not mean re-scanning a QR
+      - WHATSAPP_RESTART_ALL_SESSIONS=True
+      - WAHA_DASHBOARD_USERNAME=${WAHA_DASHBOARD_USERNAME}
+      - WAHA_DASHBOARD_PASSWORD=${WAHA_DASHBOARD_PASSWORD}
+      # Container to container on the compose network, no public hop
+      - WHATSAPP_HOOK_URL=http://backend:5000/api/whatsapp/webhook
+      - WHATSAPP_HOOK_EVENTS=message,message.any,session.status
+    volumes:
+      - waha-sessions:/app/.sessions
+    # Memory ceiling so a WAHA leak cannot take the backend down with it
+    mem_limit: 500m
+
+  backend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.backend
+    container_name: postflow-backend
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - PORT=5000
+      # Same Atlas database the laptop uses, so leads, replies and opt outs
+      # are one set of records regardless of which instance wrote them
+      - MONGODB_URI=${MONGODB_URI}
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      # The whole point of this box: light jobs yes, Chromium never.
+      # Follow-up drafting and WhatsApp sending keep running with the laptop shut.
+      - ENABLE_JOBS=true
+      - ENABLE_BROWSER_JOBS=false
+      - WAHA_URL=http://waha:3000
+      - WAHA_API_KEY=${WAHA_API_KEY}
+      - WAHA_WEBHOOK_HMAC_KEY=${WAHA_WEBHOOK_HMAC_KEY}
+      - FRONTEND_URL=${FRONTEND_URL}
+    depends_on:
+      - waha
+    mem_limit: 400m
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - WAHA_DOMAIN=${WAHA_DOMAIN}
+      - API_DOMAIN=${API_DOMAIN}
+      - ADMIN_IP=${ADMIN_IP}
+    volumes:
+      - ./Caddyfile.oracle:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    depends_on:
+      - waha
+      - backend
+    mem_limit: 100m
+
+volumes:
+  waha-sessions:
+  caddy-data:

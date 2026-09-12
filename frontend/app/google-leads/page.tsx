@@ -18,14 +18,11 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from "@/components/ui/select"
 import { TagInput } from "@/components/leads/tag-input"
 import { CallCard } from "@/components/google-leads/call-card"
+import { CampaignList } from "@/components/leads/campaign-list"
 import { leadsApi } from "@/lib/api/leads"
 import type { Lead, LeadCampaign, LeadStats, LeadStatus } from "@/lib/types"
-import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 
 const TABS: { value: string; label: string; statuses?: LeadStatus[] }[] = [
@@ -50,6 +47,7 @@ export default function GoogleLeadsPage() {
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [editingCampaign, setEditingCampaign] = useState<LeadCampaign | null>(null)
 
   // New-campaign form
   const [name, setName] = useState("")
@@ -66,8 +64,7 @@ export default function GoogleLeadsPage() {
 
   const loadCampaigns = useCallback(async () => {
     try {
-      const all = await leadsApi.listCampaigns()
-      const google = all.filter((c) => c.source === "google_maps")
+      const google = await leadsApi.listCampaigns("google_maps")
       setCampaigns(google)
       setActiveCampaign((prev) => prev || google[0]?._id || "")
       return google
@@ -169,6 +166,17 @@ export default function GoogleLeadsPage() {
       toast.error(err instanceof Error ? err.message : "Could not start the search")
     } finally {
       setBusy(false)
+    }
+  }
+
+  const handleDeleteCampaign = async (c: LeadCampaign) => {
+    try {
+      await leadsApi.deleteCampaign(c._id)
+      setCampaigns((prev) => prev.filter((x) => x._id !== c._id))
+      if (activeCampaign === c._id) setActiveCampaign("")
+      toast.success("Campaign deleted. Its leads were kept.")
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not delete")
     }
   }
 
@@ -281,8 +289,8 @@ export default function GoogleLeadsPage() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-4xl space-y-4 px-4 py-5">
-      <div className="flex flex-wrap items-center gap-2">
+    <div className="mx-auto w-full max-w-6xl px-4 py-5">
+      <div className="mb-4 flex flex-wrap items-center gap-2">
         <div className="min-w-0 flex-1">
           <h1 className="text-lg font-semibold">Google Lead Generator</h1>
           <p className="text-sm text-muted-foreground">
@@ -294,16 +302,25 @@ export default function GoogleLeadsPage() {
         </Button>
       </div>
 
+      {/* Searches on the left so every run stays visible and comparable */}
+      <div className="grid gap-4 lg:grid-cols-[240px_1fr]">
+        <CampaignList
+          campaigns={campaigns}
+          activeId={activeCampaign}
+          onSelect={setActiveCampaign}
+          onNew={() => { setEditingCampaign(null); setDialogOpen(true) }}
+          onEdit={(c) => { setEditingCampaign(c); setDialogOpen(true) }}
+          onDelete={handleDeleteCampaign}
+          newLabel="Create your first search"
+        />
+
+        <div className="min-w-0 space-y-4">
+
       <Card>
         <CardContent className="flex flex-wrap items-center gap-2 p-3">
-          <Select value={activeCampaign} onValueChange={setActiveCampaign}>
-            <SelectTrigger className="w-full sm:w-64"><SelectValue placeholder="Select a search" /></SelectTrigger>
-            <SelectContent>
-              {campaigns.map((c) => <SelectItem key={c._id} value={c._id}>{c.name}</SelectItem>)}
-            </SelectContent>
-          </Select>
           {campaign && (
             <>
+              <span className="truncate text-sm font-medium">{campaign.name}</span>
               <Badge variant="outline" className="capitalize">
                 {working ? "Working" : campaign.status}
               </Badge>
@@ -321,11 +338,14 @@ export default function GoogleLeadsPage() {
         </CardContent>
       </Card>
 
-      {campaign?.progress && campaign.progress.phase !== "idle" && (
+      {campaign?.progress && campaign.progress.phase !== "idle" &&
+        !(campaign.status === "paused" && !working) && (
         <Card>
           <CardContent className="space-y-2 p-3">
             <div className="flex items-center gap-2">
-              {working || ["planning", "collecting", "enriching", "saving"].includes(campaign.progress.phase)
+              {/* Trust the campaign status, not the phase. A phase left over
+                  from an interrupted run kept the spinner going for days. */}
+              {working
                 ? <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
                 : campaign.progress.phase === "error"
                   ? <AlertTriangle className="size-3.5 shrink-0 text-destructive" />
@@ -402,6 +422,9 @@ export default function GoogleLeadsPage() {
           ))}
         </div>
       )}
+
+        </div>
+      </div>
 
       {dialog}
     </div>

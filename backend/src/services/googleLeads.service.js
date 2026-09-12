@@ -15,7 +15,8 @@ const LeadCampaign = require('../models/LeadCampaign')
 const User         = require('../models/User')
 
 const AutomationHub = require('../../automation')
-const { draftCallScript } = require('./deepseek.service')
+const { draftCallScript, qualifyLead } = require('./deepseek.service')
+const { linkDuplicates } = require('./leadIdentity.service')
 const { PLANS } = require('../config/constants')
 const logger = require('../utils/logger')
 
@@ -112,6 +113,7 @@ const runGoogleDiscovery = async (campaignId) => {
 
     const requireNoWebsite = campaign.filters?.requireNoWebsite !== false
     const requirePhone = Boolean(campaign.filters?.requireContactInfo)
+    const offer = campaign.offer?.toObject ? campaign.offer.toObject() : (campaign.offer || {})
     let saved = 0
     let alsoSaved = 0
 
@@ -133,8 +135,52 @@ const runGoogleDiscovery = async (campaignId) => {
 
       const { score, reasons } = scorePlace(place)
 
+      // AI qualification, same as the Instagram path. Mechanical filters cannot
+      // tell a bakery from a bakery-equipment wholesaler, and both match
+      // "bakery in Lagos". Skipped when there is no offer to judge against, and
+      // when the business already failed a hard filter.
+      let aiFit = null, aiAngle = '', aiReasoning = ''
+      let finalStatus = status
+      let finalSkipReason = skipReason
+
+      if (qualifies && offer.what && offer.what.trim()) {
+        try {
+          const verdict = await qualifyLead({
+            lead: {
+              username: place.name,
+              fullName: place.name,
+              category: place.category,
+              bio: [place.category, place.address].filter(Boolean).join(' · '),
+              followers: place.reviewCount || 0,
+              following: 0,
+              postsCount: 0,
+              hasWebsite: false,
+              isBusinessAccount: true,
+              contact: { phone: place.phone, email: '' },
+              lastPostAt: null,
+              discoveredVia: { query: place.query || '' },
+            },
+            offer,
+            icp: campaign.icp,
+          })
+          aiFit = verdict.fit
+          aiAngle = verdict.angle
+          aiReasoning = verdict.reasoning
+
+          if (verdict.fit === 'unqualified') {
+            finalStatus = 'skipped'
+            finalSkipReason = verdict.reasoning || 'AI judged this business a poor fit'
+          }
+        } catch (err) {
+          // Qualification is an enhancement, not a gate. A DeepSeek outage must
+          // not silently empty the call sheet.
+          logger.warn('runGoogleDiscovery: AI qualification failed, keeping lead', { err: err.message })
+        }
+      }
+
+      let createdLead
       try {
-        await Lead.create({
+        createdLead = await Lead.create({
           user:       campaign.user,
           campaign:   campaign._id,
           source:     'google_maps',
@@ -161,15 +207,25 @@ const runGoogleDiscovery = async (campaignId) => {
           },
           score,
           scoreReasons: reasons,
-          status,
-          skipReason,
+          aiFit,
+          aiAngle,
+          aiReasoning,
+          status: finalStatus,
+          skipReason: finalSkipReason,
         })
-        if (qualifies) saved++
+        if (finalStatus === 'to_call') saved++
         else alsoSaved++
+
+        // Link to the same business found via another source, so the UI can
+        // warn before someone rings a lead that was already DMed
+        linkDuplicates(createdLead._id).catch(() => {})
 
         // Keep the campaign counters live so the UI reflects reality mid-run
         await LeadCampaign.updateOne({ _id: campaign._id }, {
-          $inc: { 'stats.qualified': qualifies ? 1 : 0, 'stats.skipped': qualifies ? 0 : 1 },
+          $inc: {
+            'stats.qualified': finalStatus === 'to_call' ? 1 : 0,
+            'stats.skipped':   finalStatus === 'to_call' ? 0 : 1,
+          },
         })
       } catch (err) {
         // 11000 means this business is already stored, which is expected on a

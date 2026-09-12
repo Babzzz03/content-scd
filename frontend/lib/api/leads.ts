@@ -31,8 +31,10 @@ const buildQuery = (params: Record<string, unknown>) => {
 
 export const leadsApi = {
   // ── Campaigns ──────────────────────────────────────────────────────────────
-  listCampaigns: async () => {
-    const res = await get<Envelope<{ campaigns: LeadCampaign[] }>>("/leads/campaigns")
+  listCampaigns: async (source?: "instagram" | "google_maps") => {
+    const res = await get<Envelope<{ campaigns: LeadCampaign[] }>>(
+      `/leads/campaigns${source ? `?source=${source}` : ""}`
+    )
     return res.data.campaigns
   },
 

@@ -838,6 +838,86 @@ Return a JSON object:
   return cleanTextFields(parsed)
 }
 
+/**
+ * Write a follow-up message for a lead who did not reply.
+ *
+ * The hard part is not writing another message, it is writing one that earns a
+ * reply the first did not. So the prompt is given every previous touch and told
+ * to add something new rather than restate. A follow-up that repeats the
+ * opener, or that opens with "just bumping this", performs worse than sending
+ * nothing at all: it confirms you are running a sequence.
+ *
+ * Touch 2 is a light nudge with a fresh angle. Touch 3 is a close: short,
+ * gives them an easy out, and does not ask again after.
+ */
+const draftFollowUp = async ({ lead, offer = {}, brandVoice, previousTouches = [], touchNumber = 2, channel = 'dm' }) => {
+  const voiceCtx = buildVoiceContext(brandVoice)
+  const isFinal = touchNumber >= 3
+  const isWhatsApp = channel === 'whatsapp'
+
+  const systemPrompt = `
+You write follow-up messages to small business owners who did not reply to a
+first ${isWhatsApp ? 'WhatsApp message' : 'cold DM'}.
+
+Silence is not rejection, it is usually a missed notification or a busy week.
+But a second message that repeats the first proves you are working a list, and
+that is worse than staying quiet.
+
+${voiceCtx}
+
+CRITICAL RULES:
+- STRICTLY shorter than the original message. Two sentences is ideal.
+- Say something NEW. A different angle, a concrete example, or one specific
+  observation about their business that the first message did not use.
+- NEVER open with "just following up", "bumping this", "circling back",
+  "did you see my message", or any apology for messaging again
+- Do not restate the offer in the same words as the first message
+- No guilt, no false urgency, no fake deadlines
+${isFinal ? `- This is the LAST message. Give them a graceful way out, make clear you
+  will not chase again, and keep the door open without asking a question that
+  demands an answer.` : `- End with ONE easy question, lighter than the first message asked`}
+- NEVER use em dashes or double hyphens anywhere in the output text
+- Always return ONLY valid JSON, no markdown fences, no explanations
+
+Return a JSON object:
+{
+  "message": "...",   // ready to send as-is
+  "angle": "..."      // what is new in this one versus the previous, max 10 words
+}
+`.trim()
+
+  const history = previousTouches
+    .map((t, i) => `Touch ${i + 1} (${t.sentAt ? new Date(t.sentAt).toDateString() : 'earlier'}): ${t.text}`)
+    .join('\n\n')
+
+  const userPrompt = `
+WHAT I SELL: ${offer.what || 'not specified'}
+PROBLEM IT SOLVES: ${offer.painPoint || 'not specified'}
+DESIRED NEXT STEP: ${offer.callToAction || 'a short reply'}
+
+THE BUSINESS:
+- Name: ${lead.fullName || lead.username}
+- Category: ${lead.category || lead.google?.primaryType || 'unknown'}
+- Bio or description: ${lead.bio || '(none)'}
+- Has a website: ${lead.hasWebsite ? 'yes' : 'NO'}
+${lead.google?.rating ? `- Google rating: ${lead.google.rating} from ${lead.google.reviewCount} reviews` : ''}
+
+WHAT I ALREADY SENT THEM, and they did not reply to:
+
+${history || '(no history recorded)'}
+
+Write touch ${touchNumber}${isFinal ? ', the final message' : ''}.
+`.trim()
+
+  const raw = await chat(systemPrompt, userPrompt, { temperature: 0.9, maxTokens: 500 })
+  const parsed = extractJson(raw)
+  if (!parsed || !parsed.message) throw new Error('DeepSeek returned no follow-up message')
+
+  const cleaned = cleanTextFields(parsed)
+  cleaned.message = String(cleaned.message).trim().slice(0, 700)
+  return cleaned
+}
+
 module.exports = {
   generateXPosts,
   generateLinkedInPost,
@@ -854,4 +934,5 @@ module.exports = {
   qualifyLead,
   draftLeadDm,
   draftCallScript,
+  draftFollowUp,
 }

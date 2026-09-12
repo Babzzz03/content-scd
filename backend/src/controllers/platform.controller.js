@@ -117,6 +117,20 @@ const verifyCookie = async (req, res) => {
     return badRequest(res, `Failed to read stored cookie: ${err.message}`)
   }
 
+  // Verification opens a real browser, so it costs a session like any other
+  // run. Leaving it uncounted let repeated Verify clicks burn the hourly budget
+  // invisibly, which is exactly what the guard exists to prevent.
+  const gate = accountHealth.canRun(account, {
+    kind: 'check',
+    siblings: await accountHealth.findSiblings(account.platform, account.username),
+  })
+  // A checkpointed or throttled account may still be verified, since that is
+  // how the user clears it. Only the volume budget applies here.
+  if (!gate.ok && /budget|Too soon/i.test(gate.reason)) {
+    return badRequest(res, gate.reason)
+  }
+  await accountHealth.recordSessionStart(account)
+
   try {
     const valid = await AutomationHub.verifyCookie({ platform: account.platform, cookie, sessionFile: null })
     account.isVerified = valid

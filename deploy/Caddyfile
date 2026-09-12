@@ -1,0 +1,39 @@
+# ─── Caddy in front of WAHA ───
+#
+# Caddy gets a Let's Encrypt certificate automatically on first request, so
+# there is no certbot step. Point an A record at the VPS IP first, or the
+# challenge fails and you get a confusing TLS error instead of a DNS one.
+
+{$WAHA_DOMAIN} {
+	# The API itself. Authentication is WAHA's X-Api-Key header, checked by WAHA,
+	# not here. Caddy's job is transport security and keeping port 3000 off the
+	# public internet.
+	reverse_proxy waha:3000
+
+	# The dashboard and Swagger UI are convenient during setup and an open door
+	# afterwards. Allow them only from your own IP.
+	#
+	# Replace with your address, or delete this block once setup is done.
+	@dashboard path /dashboard* /swagger*
+	handle @dashboard {
+		@blocked not remote_ip {$ADMIN_IP}
+		respond @blocked 403
+		reverse_proxy waha:3000
+	}
+
+	encode gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000;"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		-Server
+	}
+
+	log {
+		output file /data/access.log {
+			roll_size 10mb
+			roll_keep 5
+		}
+	}
+}

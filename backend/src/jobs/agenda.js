@@ -1,6 +1,19 @@
 const Agenda = require('agenda')
 const logger = require('../utils/logger')
 
+/**
+ * Browser jobs launch real Chromium through Playwright and need 400 to 600 MB.
+ * Everything else is HTTP or an AI call and runs in tens of MB.
+ *
+ * A small hosted instance (Railway free is 512 MB) can run the light jobs
+ * around the clock, which is what makes WhatsApp sending and follow-up drafting
+ * work while your laptop is closed. It must never run the browser jobs, or it
+ * gets OOM killed mid-scrape.
+ */
+const BROWSER_JOBS = ['engage', 'publish-post', 'discover-leads', 'send-lead-dm', 'check-lead-replies']
+
+const browserJobsEnabled = () => process.env.ENABLE_BROWSER_JOBS !== 'false'
+
 let agenda = null
 
 const getAgenda = () => {
@@ -74,8 +87,18 @@ const initAgenda = async () => {
     }
   })
 
+  /**
+   * Hand a browser job back to the queue if this instance cannot run it.
+   * Agenda re-queues on throw, so an instance with a browser picks it up.
+   */
+  const requiresBrowser = (name) => {
+    if (browserJobsEnabled()) return
+    throw new Error(`${name} needs a browser and ENABLE_BROWSER_JOBS=false on this instance`)
+  }
+
   // ── Lead discovery for one campaign ──────────────────────────────────────
   agenda.define('discover-leads', { concurrency: 1 }, async (job) => {
+    requiresBrowser('discover-leads')
     const { campaignId } = job.attrs.data
     const LeadCampaignModel = require('../models/LeadCampaign')
     const c = await LeadCampaignModel.findById(campaignId).select('source').lean()
@@ -208,6 +231,7 @@ const initAgenda = async () => {
 
   // ── Send one approved DM ─────────────────────────────────────────────────
   agenda.define('send-lead-dm', { concurrency: 1 }, async (job) => {
+    requiresBrowser('send-lead-dm')
     const { sendLeadDm } = require('../services/leadGen.service')
     const { leadId, attempt = 0 } = job.attrs.data
     try {
@@ -311,6 +335,27 @@ const initAgenda = async () => {
     }
   })
 
+  // ── Follow-up sequencing ──────────────────────────────────────────────────
+  // Drafts the next touch for leads whose wait has elapsed. Drafting rather
+  // than sending keeps a human in the loop, the same as a first message.
+  agenda.define('prepare-followups', { concurrency: 1 }, async () => {
+    const { prepareDueFollowUps } = require('../services/followUp.service')
+    const prepared = await prepareDueFollowUps({ limit: 25 })
+    if (prepared.length) {
+      logger.info('prepare-followups: drafts ready for review', { count: prepared.length })
+    }
+  })
+
+  // ── WhatsApp outbound queue ───────────────────────────────────────────────
+  // Without this the queue fills and nothing sends, which looks identical to a
+  // broken WAHA connection.
+  try {
+    const { defineWhatsAppSender } = require('./whatsappSender.job')
+    defineWhatsAppSender(agenda)
+  } catch (err) {
+    logger.warn('WhatsApp sender job not registered', { err: err.message })
+  }
+
   // ── Nightly: reset daily platform post counts ─────────────────────────────
   agenda.define('reset-daily-counts', { concurrency: 1 }, async () => {
     const PlatformAccount = require('../models/PlatformAccount')
@@ -331,10 +376,17 @@ const initAgenda = async () => {
   await agenda.start()
 
   // Schedule recurring jobs (idempotent — Agenda skips if already scheduled)
-  await agenda.every('1 minute', 'check-scheduled-posts', {}, { skipImmediate: true })
+  // Only schedule the browser-dependent sweeps where a browser can actually run
+  if (browserJobsEnabled()) {
+    await agenda.every('1 minute', 'check-scheduled-posts', {}, { skipImmediate: true })
+    await agenda.every('10 minutes', 'dispatch-dm-queue', {}, { skipImmediate: true })
+    await agenda.every('30 minutes', 'check-lead-replies', {}, { skipImmediate: true })
+  } else {
+    logger.info('Browser jobs disabled on this instance (ENABLE_BROWSER_JOBS=false)')
+  }
   await agenda.every('1 day', 'reset-daily-counts', {}, { skipImmediate: true })
-  await agenda.every('10 minutes', 'dispatch-dm-queue', {}, { skipImmediate: true })
-  await agenda.every('30 minutes', 'check-lead-replies', {}, { skipImmediate: true })
+  await agenda.every('30 seconds', 'whatsapp:drain-queue', {}, { skipImmediate: true })
+  await agenda.every('1 hour', 'prepare-followups', {}, { skipImmediate: true })
 
   logger.info('Agenda job queue started')
   return agenda

@@ -1,0 +1,34 @@
+# ─── PostFlow backend, browser-free build ───
+#
+# Deliberately does NOT install Playwright's browsers. This image runs on a 1GB
+# box alongside WAHA, where Chromium would not fit, and it is pinned to
+# ENABLE_BROWSER_JOBS=false so it never tries to launch one.
+#
+# PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD keeps the install small: the playwright
+# package is still required at boot by BrowserManager, but the module loading is
+# cheap. Only launching a browser costs memory, and this instance never does.
+
+FROM node:22-alpine
+
+WORKDIR /app
+
+# Install deps first so a code change does not re-run npm install
+COPY backend/package*.json ./
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+RUN npm ci --omit=dev && npm cache clean --force
+
+COPY backend/ ./
+
+# Sessions are written by the scraping instance, not this one, but the path
+# must exist or SessionManager throws on load
+RUN mkdir -p automation/sessions logs
+
+ENV NODE_ENV=production
+ENV PORT=5000
+EXPOSE 5000
+
+# Fail the container rather than serve a half-dead process
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+  CMD wget -qO- http://localhost:5000/health || exit 1
+
+CMD ["node", "server.js"]

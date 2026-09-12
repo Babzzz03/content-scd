@@ -1,0 +1,85 @@
+# ─── WAHA on Oracle Cloud (Ampere A1 / ARM64) ───
+#
+# Runs on the VPS, NOT on Vercel. WAHA holds a long lived WhatsApp connection,
+# which serverless cannot host.
+#
+# The image tag matters more than anything else in this file. The default
+# devlikeapro/waha tag has no arm64 manifest and fails on Ampere with
+# "no matching manifest for linux/arm64/v8". The -arm variants are the fix.
+#
+#   docker compose -f docker-compose.waha.yml up -d
+
+services:
+  waha:
+    # NOWEB is a websocket engine with no browser, so it runs comfortably in a
+    # few hundred MB. The browser engine (WEBJS) would need Chromium on ARM,
+    # which is slow and memory hungry on a free tier box.
+    image: devlikeapro/waha:noweb-arm
+    container_name: waha
+    restart: unless-stopped
+
+    environment:
+      # Without this, anyone who finds the host can send messages from every
+      # paired WhatsApp account. Treat it like a production database password.
+      - WAHA_API_KEY=${WAHA_API_KEY}
+
+      - WHATSAPP_DEFAULT_ENGINE=NOWEB
+
+      # Sessions survive a container restart. Without this, every restart means
+      # every user re-scans a QR code.
+      - WHATSAPP_RESTART_ALL_SESSIONS=True
+
+      # The dashboard is useful while setting up and a liability afterwards.
+      # Keep it behind the same TLS and credentials as everything else.
+      - WAHA_DASHBOARD_USERNAME=${WAHA_DASHBOARD_USERNAME}
+      - WAHA_DASHBOARD_PASSWORD=${WAHA_DASHBOARD_PASSWORD}
+
+      # Where incoming messages and status changes are POSTed. This is your
+      # Express backend, wherever it runs.
+      - WHATSAPP_HOOK_URL=${WAHA_WEBHOOK_URL}
+      - WHATSAPP_HOOK_EVENTS=message,session.status
+      - WAHA_WEBHOOK_HMAC_KEY=${WAHA_WEBHOOK_HMAC_KEY}
+
+      - TZ=Africa/Lagos
+
+    volumes:
+      # The single most important line here. Session credentials live in this
+      # directory, and losing it means every user re-pairs from scratch.
+      - ./waha-sessions:/app/.sessions
+      - ./waha-media:/app/.media
+
+    # Bound to localhost only. Caddy is the only thing allowed to reach it, so
+    # port 3000 is never exposed to the internet directly.
+    ports:
+      - '127.0.0.1:3000:3000'
+
+    # Some Oracle images resolve web.whatsapp.com unreliably through the default
+    # resolver. Pinning public DNS removes a confusing class of startup failure.
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:3000/health']
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: caddy
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - waha
+
+volumes:
+  caddy_data:
+  caddy_config:

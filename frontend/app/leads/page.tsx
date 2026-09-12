@@ -19,6 +19,7 @@ import {
 import { CampaignDialog } from "@/components/leads/campaign-dialog"
 import { LeadDetailSheet } from "@/components/leads/lead-detail-sheet"
 import { LeadRow } from "@/components/leads/lead-row"
+import { CampaignList } from "@/components/leads/campaign-list"
 import { leadsApi, type ListLeadsParams } from "@/lib/api/leads"
 import type { Lead, LeadCampaign, LeadStats, LeadStatus } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -50,6 +51,7 @@ export default function LeadsPage() {
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [editingCampaign, setEditingCampaign] = useState<LeadCampaign | null>(null)
   const [detailLead, setDetailLead] = useState<Lead | null>(null)
 
   const campaign = campaigns.find((c) => c._id === activeCampaign)
@@ -58,7 +60,9 @@ export default function LeadsPage() {
 
   const loadCampaigns = useCallback(async () => {
     try {
-      const list = await leadsApi.listCampaigns()
+      // Instagram campaigns only. Google campaigns live on /google-leads and
+      // were previously leaking onto this page, where their runs made no sense.
+      const list = await leadsApi.listCampaigns("instagram")
       setCampaigns(list)
       setActiveCampaign((prev) => prev || list[0]?._id || "")
       return list
@@ -167,6 +171,17 @@ export default function LeadsPage() {
     }
   }
 
+  const handleDeleteCampaign = async (c: LeadCampaign) => {
+    try {
+      await leadsApi.deleteCampaign(c._id)
+      setCampaigns((prev) => prev.filter((x) => x._id !== c._id))
+      if (activeCampaign === c._id) setActiveCampaign("")
+      toast.success("Campaign deleted. Its leads were kept.")
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not delete")
+    }
+  }
+
   const handleExport = async () => {
     try {
       const blob = await leadsApi.downloadCsv({ campaign: activeCampaign })
@@ -216,7 +231,8 @@ export default function LeadsPage() {
         </div>
         <CampaignDialog
           open={dialogOpen}
-          onClose={() => setDialogOpen(false)}
+          editing={editingCampaign}
+          onClose={() => { setDialogOpen(false); setEditingCampaign(null) }}
           onCreated={(c) => { setCampaigns((p) => [c, ...p]); setActiveCampaign(c._id) }}
         />
       </>
@@ -224,7 +240,7 @@ export default function LeadsPage() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-5xl space-y-4 px-4 py-5">
+    <div className="mx-auto w-full max-w-6xl space-y-4 px-4 py-5">
       {/* ── Header ─────────────────────────────────────────────────────── */}
       <div className="flex flex-wrap items-center gap-2">
         <div className="min-w-0 flex-1">
@@ -238,19 +254,27 @@ export default function LeadsPage() {
         </Button>
       </div>
 
+      {/* Campaigns on the left so every run stays visible and comparable */}
+      <div className="grid gap-4 lg:grid-cols-[240px_1fr]">
+        <CampaignList
+          campaigns={campaigns}
+          activeId={activeCampaign}
+          onSelect={setActiveCampaign}
+          onNew={() => { setEditingCampaign(null); setDialogOpen(true) }}
+          onEdit={(c) => { setEditingCampaign(c); setDialogOpen(true) }}
+          onDelete={handleDeleteCampaign}
+          newLabel="Create your first campaign"
+        />
+
+        <div className="min-w-0 space-y-4">
+
       {/* ── Campaign bar ───────────────────────────────────────────────── */}
       {campaigns.length > 0 && (
         <Card>
           <CardContent className="flex flex-wrap items-center gap-2 p-3">
-            <Select value={activeCampaign} onValueChange={setActiveCampaign}>
-              <SelectTrigger className="w-full sm:w-64"><SelectValue placeholder="Select campaign" /></SelectTrigger>
-              <SelectContent>
-                {campaigns.map((c) => (
-                  <SelectItem key={c._id} value={c._id}>{c.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-
+            {campaign && (
+              <span className="truncate text-sm font-medium">{campaign.name}</span>
+            )}
             {campaign && (
               <>
                 <Badge variant="outline" className="capitalize">{campaign.status}</Badge>
@@ -454,10 +478,20 @@ export default function LeadsPage() {
         )}
       </Card>
 
+        </div>
+      </div>
+
       <CampaignDialog
         open={dialogOpen}
-        onClose={() => setDialogOpen(false)}
-        onCreated={(c) => { setCampaigns((p) => [c, ...p]); setActiveCampaign(c._id) }}
+        editing={editingCampaign}
+        onClose={() => { setDialogOpen(false); setEditingCampaign(null) }}
+        onCreated={(c) => {
+          setCampaigns((prev) => {
+            const exists = prev.some((x) => x._id === c._id)
+            return exists ? prev.map((x) => (x._id === c._id ? c : x)) : [c, ...prev]
+          })
+          setActiveCampaign(c._id)
+        }}
       />
 
       <LeadDetailSheet

@@ -106,7 +106,16 @@ const fetchLocation = (page, locationId) =>
  */
 const extractUsernamesFromMediaResponse = (json) => {
   if (!json) return []
-  const out = new Set()
+  // username -> most recent taken_at seen for them
+  const out = new Map()
+
+  const note = (uname, takenAt) => {
+    if (!uname) return
+    const key = uname.toLowerCase()
+    const prev = out.get(key) || 0
+    if (takenAt && takenAt > prev) out.set(key, takenAt)
+    else if (!out.has(key)) out.set(key, takenAt || 0)
+  }
 
   const walkSections = (sections) => {
     if (!Array.isArray(sections)) return
@@ -115,8 +124,11 @@ const extractUsernamesFromMediaResponse = (json) => {
         || section?.layout_content?.one_by_two_item?.clips?.items
         || []
       for (const m of medias) {
-        const uname = m?.media?.user?.username || m?.media?.owner?.username
-        if (uname) out.add(uname.toLowerCase())
+        const media = m?.media || m
+        const uname = media?.user?.username || media?.owner?.username
+        // The post that surfaced them proves they were active on that date,
+        // which is the recency signal the profile page cannot give us.
+        note(uname, media?.taken_at || media?.taken_at_timestamp || 0)
       }
     }
   }
@@ -131,11 +143,13 @@ const extractUsernamesFromMediaResponse = (json) => {
     || json?.graphql?.hashtag?.edge_hashtag_to_top_posts?.edges
     || []
   for (const e of edges) {
-    const uname = e?.node?.owner?.username
-    if (uname) out.add(uname.toLowerCase())
+    note(e?.node?.owner?.username, e?.node?.taken_at_timestamp || 0)
   }
 
-  return [...out]
+  return [...out.entries()].map(([username, takenAt]) => ({
+    username,
+    postedAt: takenAt ? new Date(takenAt * 1000) : null,
+  }))
 }
 
 /** Pull account usernames out of a topsearch response. */

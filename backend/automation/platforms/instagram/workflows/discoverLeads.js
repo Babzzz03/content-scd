@@ -116,8 +116,10 @@ const collectCandidates = async (page, plan, maxCandidates, onProgress = () => {
   const candidates = new Set()
   const sources = new Map()   // username → { type, query }
 
-  const note = (uname, type, query) => {
-    if (!sources.has(uname)) sources.set(uname, { type, query })
+  const note = (uname, type, query, postedAt = null) => {
+    const prev = sources.get(uname)
+    if (!prev) sources.set(uname, { type, query, postedAt })
+    else if (postedAt && (!prev.postedAt || postedAt > prev.postedAt)) prev.postedAt = postedAt
     candidates.add(uname)
   }
 
@@ -129,10 +131,11 @@ const collectCandidates = async (page, plan, maxCandidates, onProgress = () => {
 
     if (!names.length) {
       logger.debug('discoverLeads: hashtag API empty, trying DOM', { tag })
-      names = await collectFromHashtagDom(page, tag, 15)
+      // DOM fallback yields bare handles with no date
+      names = (await collectFromHashtagDom(page, tag, 15)).map((u) => ({ username: u, postedAt: null }))
     }
 
-    for (const n of names) note(n, 'hashtag', `#${tag}`)
+    for (const n of names) note(n.username, 'hashtag', `#${tag}`, n.postedAt)
     logger.info('discoverLeads: hashtag scanned', { tag, found: names.length, total: candidates.size })
     onProgress({
       phase: 'collecting',
@@ -157,7 +160,7 @@ const collectCandidates = async (page, plan, maxCandidates, onProgress = () => {
       if (candidates.size >= maxCandidates) break
       const locJson = await fetchLocation(page, place.id)
       for (const n of extractUsernamesFromMediaResponse(locJson)) {
-        note(n, 'location', place.name || query)
+        note(n.username, 'location', place.name || query, n.postedAt)
       }
       await sleep(randInt(1500, 3500))
     }
@@ -273,6 +276,10 @@ const discoverLeads = async (page, payload) => {
     const src = sources.get(username) || { type: 'hashtag', query: '' }
     const enrichedLead = {
       ...profile,
+      // DOM enrichment cannot read post dates, so fall back to the date of the
+      // post that surfaced them. It is a floor, not the exact latest post, but
+      // it proves recent activity and lets the recency score actually fire.
+      lastPostAt: profile.lastPostAt || src.postedAt || null,
       profileUrl: `https://www.instagram.com/${profile.username}/`,
       niche:    pick(niches) || '',
       location: pick(locations) || '',

@@ -71,6 +71,25 @@ const leadSchema = new mongoose.Schema(
     /** Most recent post date, used to filter out dormant accounts */
     lastPostAt:  { type: Date, default: null },
 
+    /**
+     * Normalised business identity, used to spot the same business found
+     * through more than one source.
+     *
+     * The unique index keys on source, so a bakery discovered on both Instagram
+     * and Google Maps is legitimately two rows. Without this, you could DM them
+     * and ring them the same afternoon, which reads as spam to the recipient.
+     */
+    /**
+     * Channel-agnostic opt out. WhatsApp STOP detection and Instagram reply
+     * scanning both set this, so a refusal on one channel silences all of them.
+     */
+    optedOut:   { type: Boolean, default: false, index: true },
+    optedOutAt: { type: Date, default: null },
+
+    identityKey: { type: String, default: '', index: true },
+    /** Other leads believed to be the same business */
+    linkedLeads: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Lead' }],
+
     // ── Google Maps specific ───────────────────────────────────────────────
     google: {
       placeId:        { type: String, default: '' },
@@ -126,6 +145,20 @@ const leadSchema = new mongoose.Schema(
       default: 'new',
       index: true,
     },
+    // ── Follow-up sequence ─────────────────────────────────────────────────
+    /** Messages actually delivered to this lead. The first send sets it to 1. */
+    touches:        { type: Number, default: 0 },
+    lastTouchAt:    { type: Date, default: null },
+    /** When the next follow-up is due. Null means none scheduled. */
+    nextFollowUpAt: { type: Date, default: null, index: true },
+    /** Every message sent, so a follow-up can avoid repeating the first one. */
+    touchHistory: [{
+      touch:  { type: Number },
+      text:   { type: String },
+      sentAt: { type: Date },
+      channel:{ type: String },
+    }],
+
     draftMessage:    { type: String, default: '' },   // AI-written, editable
     approvedMessage: { type: String, default: '' },   // what actually gets sent
     messagedAt:      { type: Date, default: null },

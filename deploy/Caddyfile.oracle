@@ -1,0 +1,39 @@
+# ─── Caddy for the Oracle box ───
+#
+# Two hostnames on one instance. Caddy gets Let's Encrypt certificates on first
+# request, so point both A records at the instance IP BEFORE starting it, or the
+# challenge fails and the error looks like TLS rather than the DNS problem it is.
+
+# WhatsApp API. Auth is WAHA's own X-Api-Key header; Caddy's job is TLS and
+# keeping port 3000 off the public internet.
+{$WAHA_DOMAIN} {
+	reverse_proxy waha:3000
+
+	# The dashboard and Swagger UI are useful while pairing and an open door
+	# afterwards. Restrict them to your own address.
+	@dashboard path /dashboard* /swagger*
+	handle @dashboard {
+		@blocked not remote_ip {$ADMIN_IP}
+		respond @blocked 403
+		reverse_proxy waha:3000
+	}
+
+	encode gzip
+	header {
+		Strict-Transport-Security "max-age=31536000;"
+		X-Content-Type-Options "nosniff"
+		-Server
+	}
+}
+
+# PostFlow API. This is what makes incoming WhatsApp replies work without a
+# tunnel: a permanent HTTPS webhook target that does not change on restart.
+{$API_DOMAIN} {
+	reverse_proxy backend:5000
+	encode gzip
+	header {
+		Strict-Transport-Security "max-age=31536000;"
+		X-Content-Type-Options "nosniff"
+		-Server
+	}
+}

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Loader2, Search, Filter, Target, Send, Info } from "lucide-react"
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -34,14 +34,17 @@ interface CampaignDialogProps {
   open: boolean
   onClose: () => void
   onCreated: (campaign: LeadCampaign) => void
+  /** When set the dialog edits this campaign instead of creating one */
+  editing?: LeadCampaign | null
 }
 
-export function CampaignDialog({ open, onClose, onCreated }: CampaignDialogProps) {
+export function CampaignDialog({ open, onClose, onCreated, editing = null }: CampaignDialogProps) {
   const { accounts } = useAccounts()
   const instagram = accounts.find((a) => a.platform === "instagram")
 
   const [saving, setSaving] = useState(false)
   const [tab, setTab] = useState("search")
+  const isEdit = Boolean(editing)
 
   const [name, setName] = useState("")
   const [niches, setNiches] = useState<string[]>([])
@@ -69,18 +72,49 @@ export function CampaignDialog({ open, onClose, onCreated }: CampaignDialogProps
   const [windowEnd, setWindowEnd] = useState(18)
   const [useWarmup, setUseWarmup] = useState(true)
 
-  const canSave = name.trim().length > 0 && niches.length > 0 && Boolean(instagram?.accountId)
+  // Load the campaign's current values when the dialog opens for an edit.
+  // Without this there was no way to fix a campaign at all: an empty offer made
+  // the AI reject every lead and the only recourse was starting over.
+  useEffect(() => {
+    if (!open) return
+    if (!editing) return
+    setName(editing.name || "")
+    setNiches(editing.search?.niches || [])
+    setLocations(editing.search?.locations || [])
+    setTargetLeadCount(editing.targetLeadCount || 100)
+    setRequireNoWebsite(editing.filters?.requireNoWebsite !== false)
+    setRequireBusinessAccount(editing.filters?.requireBusinessAccount !== false)
+    setRequireContactInfo(Boolean(editing.filters?.requireContactInfo))
+    setExcludeVerified(editing.filters?.excludeVerified !== false)
+    setMinFollowers(editing.filters?.minFollowers ?? 500)
+    setMaxFollowers(editing.filters?.maxFollowers ?? 50000)
+    setActiveWithinDays(editing.filters?.activeWithinDays ?? 60)
+    setExcludeKeywords(editing.filters?.excludeKeywords || [])
+    setOfferWhat(editing.offer?.what || "")
+    setOfferPain(editing.offer?.painPoint || "")
+    setOfferProof(editing.offer?.proof || "")
+    setOfferCta(editing.offer?.callToAction || "")
+    setIcp(editing.icp || "")
+    setAutoSend(Boolean(editing.messageSettings?.autoSend))
+    setDailyCap(editing.messageSettings?.dailyCap ?? 20)
+    setWindowStart(editing.messageSettings?.sendWindow?.start ?? 9)
+    setWindowEnd(editing.messageSettings?.sendWindow?.end ?? 18)
+    setUseWarmup(editing.messageSettings?.useWarmup !== false)
+  }, [open, editing])
+
+  const canSave = name.trim().length > 0 && niches.length > 0 &&
+    (isEdit || Boolean(instagram?.accountId))
 
   const handleSave = async () => {
-    if (!instagram?.accountId) {
+    if (!isEdit && !instagram?.accountId) {
       toast.error("Connect an Instagram account in Settings first")
       return
     }
     setSaving(true)
     try {
-      const campaign = await leadsApi.createCampaign({
+      const payload = {
         name: name.trim(),
-        platformAccountId: instagram.accountId,
+        platformAccountId: instagram?.accountId,
         search: { niches, locations, extraHashtags: [], generatedQueries: [] },
         filters: {
           requireNoWebsite, requireBusinessAccount, requireContactInfo,
@@ -98,8 +132,13 @@ export function CampaignDialog({ open, onClose, onCreated }: CampaignDialogProps
           timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
           useWarmup,
         },
-      })
-      toast.success("Campaign created")
+      }
+
+      const campaign = isEdit
+        ? await leadsApi.updateCampaign(editing!._id, payload as Partial<LeadCampaign>)
+        : await leadsApi.createCampaign(payload as Partial<LeadCampaign>)
+
+      toast.success(isEdit ? "Campaign updated" : "Campaign created")
       onCreated(campaign)
       onClose()
     } catch (err) {
@@ -113,9 +152,11 @@ export function CampaignDialog({ open, onClose, onCreated }: CampaignDialogProps
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>New lead campaign</DialogTitle>
+          <DialogTitle>{isEdit ? "Edit campaign" : "New lead campaign"}</DialogTitle>
           <DialogDescription>
-            Find businesses on Instagram that match your niche and location, then draft a DM for each one.
+            {isEdit
+              ? "Changing the niche or location clears the cached hashtag expansion, so the next run re-searches."
+              : "Find businesses on Instagram that match your niche and location, then draft a DM for each one."}
           </DialogDescription>
         </DialogHeader>
 
@@ -354,7 +395,7 @@ export function CampaignDialog({ open, onClose, onCreated }: CampaignDialogProps
         </Tabs>
 
         <DialogFooter className="gap-2">
-          {!instagram?.accountId && (
+          {!isEdit && !instagram?.accountId && (
             <p className="mr-auto text-xs text-destructive">
               Connect an Instagram account in Settings first
             </p>
@@ -362,7 +403,7 @@ export function CampaignDialog({ open, onClose, onCreated }: CampaignDialogProps
           <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
           <Button onClick={handleSave} disabled={!canSave || saving}>
             {saving && <Loader2 className="size-3.5 animate-spin" />}
-            Create campaign
+            {isEdit ? "Save changes" : "Create campaign"}
           </Button>
         </DialogFooter>
       </DialogContent>

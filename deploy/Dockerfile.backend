@@ -24,8 +24,18 @@ COPY backend/ ./
 RUN mkdir -p automation/sessions logs
 
 ENV NODE_ENV=production
-ENV PORT=5000
 EXPOSE 5000
+
+# Cap the V8 heap well under the container limit.
+#
+# Railway free gives 512MB per service. Node's default heap target is based on
+# total host memory, not the cgroup limit, so on a constrained container it will
+# happily grow past the ceiling and get OOM killed rather than running a GC.
+# 320MB leaves room for the rest of the process and the runtime.
+ENV NODE_OPTIONS="--max-old-space-size=320"
+
+# PORT is injected by Railway. Do not set it here, server.js reads process.env.PORT
+# and falls back to 5000 for local Docker use.
 
 # Fail the container rather than serve a half-dead process
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
